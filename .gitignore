@@ -1,0 +1,7 @@
+.build/
+build/
+*.app
+.DS_Store
+SamplePaper/*.aux
+SamplePaper/*.log
+SamplePaper/*.out
