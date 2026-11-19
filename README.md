@@ -5,9 +5,9 @@ answer composed from the paper itself: every quote is the paper's own words, hig
 color as its source and joined to it by a beam. Design: Figma file "Preview_v2", direction D "Parallel space".
 
 Rule of the look: anything the authors wrote is paper; anything the AI made is Liquid Glass.
-The window itself is transparent, so the glass shows (blurred) whatever is really behind it and
-follows light and dark mode. View ▸ Dim Behind Window adds a soft wash if the desktop is too busy.
-Drag the window by its top edge.
+The window's background is the desktop, blurred ("Frosted"), so the glass on top picks up real
+color and follows light and dark mode. View ▸ Backdrop switches between Frosted (default), Dimmed
+(the dark "space" from the Figma design) and Clear (no background at all). Drag the window by its top edge.
 
 ## Run it
 
@@ -33,6 +33,7 @@ The first time you ask a question, the app asks for your Claude API key and save
 ## Test flags
 
 - `PaperCompanion --selftest <pdf>` checks that known sentences are found in the sample paper.
+- `--backdrop frosted|dimmed|clear` picks the backdrop for that launch.
 - `--appearance dark|light` previews the app in a mode other than the Mac's own.
 - `--open <pdf> --demo` runs a canned answer through the real pipeline (no API call, nothing saved).
 

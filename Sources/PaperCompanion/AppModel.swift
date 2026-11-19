@@ -55,9 +55,10 @@ final class AppModel {
     var errorMessage: String?
     var showKeySheet = false
     var showThreadList = false
-    /// View ▸ Dim Behind Window. Off: the window is clear and the glass shows the real desktop.
-    var dimBackdrop = UserDefaults.standard.bool(forKey: "dimBackdrop") {
-        didSet { UserDefaults.standard.set(dimBackdrop, forKey: "dimBackdrop") }
+    /// View ▸ Backdrop. Frosted (default) blurs the desktop behind the window; Dimmed is the darker
+    /// "space" from the Figma design; Clear shows the desktop as it is.
+    var backdrop = Backdrop(rawValue: UserDefaults.standard.string(forKey: "backdrop") ?? "") ?? .frosted {
+        didSet { UserDefaults.standard.set(backdrop.rawValue, forKey: "backdrop") }
     }
 
     let geometry = SpaceGeometry()
@@ -65,6 +66,12 @@ final class AppModel {
 
     init() {
         pdf.model = self
+        // Test flag: `--backdrop frosted|dimmed|clear`.
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--backdrop"), args.indices.contains(i + 1),
+           let b = Backdrop(rawValue: args[i + 1]) {
+            backdrop = b
+        }
     }
 
     var openThread: PaperThread? { threads.first { $0.id == openThreadID } }

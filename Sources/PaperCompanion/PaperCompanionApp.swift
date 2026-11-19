@@ -59,7 +59,9 @@ struct PaperCompanionApp: App {
                 Button("Open Sample Paper") { model.openSample() }
             }
             CommandGroup(after: .toolbar) {
-                Toggle("Dim Behind Window", isOn: Binding(get: { model.dimBackdrop }, set: { model.dimBackdrop = $0 }))
+                Picker("Backdrop", selection: Binding(get: { model.backdrop }, set: { model.backdrop = $0 })) {
+                    ForEach(Backdrop.allCases) { Text($0.label).tag($0) }
+                }
             }
             CommandGroup(after: .appSettings) {
                 Button("Claude API Key…") { model.showKeySheet = true }

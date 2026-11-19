@@ -113,6 +113,19 @@ struct PaperArchive: Codable {
     var openThreadID: UUID?
 }
 
+/// What sits behind the paper and the glass (View ▸ Backdrop).
+enum Backdrop: String, CaseIterable, Identifiable {
+    case frosted, dimmed, clear
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .frosted: "Frosted"
+        case .dimmed: "Dimmed"
+        case .clear: "Clear"
+        }
+    }
+}
+
 /// One hue per source. Matches the Figma palette (purple, yellow, teal, pink, ...).
 enum SourcePalette {
     static let rgb: [(Double, Double, Double)] = [

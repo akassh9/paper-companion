@@ -10,7 +10,7 @@ struct SpaceView: View {
             let pdfWidth: CGFloat = min(820, max(520, geo.size.width - sheetWidth - 64 - 64 - 160))
 
             ZStack(alignment: .topLeading) {
-                if model.dimBackdrop { SpaceBackdrop() }
+                SpaceBackdrop(backdrop: model.backdrop)
                 // A faint strip along the top, so the window can still be dragged.
                 Color.primary.opacity(0.01)
                     .frame(height: 40)
@@ -82,25 +82,60 @@ struct SpaceView: View {
             .coordinateSpace(.named("space"))
         }
         .ignoresSafeArea()
-        .background(TransparentWindow())
+        .background(TransparentWindow(hasShadow: model.backdrop != .clear))
         .containerBackground(.clear, for: .window)
+        .preferredColorScheme(model.backdrop == .dimmed ? .dark : nil)
         .sheet(isPresented: $model.showKeySheet) { APIKeySheet(model: model) }
     }
 }
 
-/// Optional (View ▸ Dim Behind Window): a see-through wash that calms a busy desktop. Off by default,
-/// so the window is fully transparent and the glass shows whatever is really behind it.
+/// The window's own background. Frosted: the desktop, blurred behind the window, with a light dim.
+/// Dimmed: the same blur under a deep blue-black wash, like the Figma "space". Clear: nothing.
 struct SpaceBackdrop: View {
+    let backdrop: Backdrop
+    @Environment(\.colorScheme) private var scheme
+
     var body: some View {
-        Rectangle()
-            .fill(.background.opacity(0.55))
-            .ignoresSafeArea()
-            .allowsHitTesting(false)
+        ZStack {
+            if backdrop != .clear {
+                BehindWindowBlur()
+                switch backdrop {
+                case .frosted:
+                    Color.black.opacity(scheme == .dark ? 0.25 : 0.05)
+                case .dimmed:
+                    LinearGradient(colors: [Color(red: 0.04, green: 0.06, blue: 0.13).opacity(0.78),
+                                            Color(red: 0.07, green: 0.06, blue: 0.14).opacity(0.70)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                case .clear:
+                    EmptyView()
+                }
+            }
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
     }
+}
+
+/// A behind-window blur, the way standard macOS windows get their frosted, desktop-tinted background.
+struct BehindWindowBlur: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.blendingMode = .behindWindow
+        v.material = .underWindowBackground
+        v.state = .active
+        v.wantsLayer = true
+        v.layer?.cornerRadius = 16
+        v.layer?.cornerCurve = .continuous
+        v.layer?.masksToBounds = true
+        return v
+    }
+    func updateNSView(_ v: NSVisualEffectView, context: Context) {}
 }
 
 /// Makes the hosting NSWindow transparent, so Liquid Glass samples the desktop and other windows.
 struct TransparentWindow: NSViewRepresentable {
+    var hasShadow: Bool
+
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         DispatchQueue.main.async { configure(view.window) }
@@ -110,10 +145,15 @@ struct TransparentWindow: NSViewRepresentable {
         DispatchQueue.main.async { configure(view.window) }
     }
     private func configure(_ window: NSWindow?) {
-        guard let window, window.isOpaque else { return }
-        window.isOpaque = false
-        window.backgroundColor = .clear
-        window.hasShadow = false
+        guard let window else { return }
+        if window.isOpaque {
+            window.isOpaque = false
+            window.backgroundColor = .clear
+        }
+        if window.hasShadow != hasShadow {
+            window.hasShadow = hasShadow
+            window.invalidateShadow()
+        }
     }
 }
 
