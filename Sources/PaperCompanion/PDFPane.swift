@@ -8,6 +8,9 @@ final class PDFController: NSObject {
     private(set) var pdfView: PDFView?
     private var applied: [HighlightSpec] = []
     private var annotations: [PDFAnnotation] = []
+    /// Line rectangles (page coordinates) of each colored highlight, for hover hit-testing.
+    private var hoverRects: [(id: UUID, page: Int, rects: [CGRect])] = []
+    private var hoverFromPaper = false
     private var ignoreSelection = false
 
     func attach(_ view: PDFView) {
@@ -48,8 +51,12 @@ final class PDFController: NSObject {
         guard specs != applied, let doc = pdfView?.document else { return }
         for a in annotations { a.page?.removeAnnotation(a) }
         annotations = []
+        hoverRects = []
         for spec in specs {
             guard let page = doc.page(at: spec.span.page), let sel = page.selection(for: spec.span.range) else { continue }
+            if !spec.muted {
+                hoverRects.append((spec.id, spec.span.page, sel.selectionsByLine().map { $0.bounds(for: page) }))
+            }
             let color = spec.muted
                 ? NSColor(white: 0.5, alpha: 0.16)
                 : SourcePalette.nsColor(spec.colorIndex, alpha: 0.32)
@@ -112,6 +119,25 @@ final class PDFController: NSObject {
         ignoreSelection = false
     }
 
+    /// The pointer moved over the paper: emphasize the beam of the highlight under it.
+    func hover(_ event: NSEvent) {
+        guard let pdfView, let model, let doc = pdfView.document else { return }
+        let p = pdfView.convert(event.locationInWindow, from: nil)
+        var found: UUID?
+        if let page = pdfView.page(for: p, nearest: false) {
+            let pp = pdfView.convert(p, to: page)
+            let index = doc.index(for: page)
+            found = hoverRects.first { $0.page == index && $0.rects.contains { $0.insetBy(dx: -2, dy: -2).contains(pp) } }?.id
+        }
+        if let found {
+            if model.geometry.hoveredSource != found { model.geometry.hoveredSource = found }
+            hoverFromPaper = true
+        } else if hoverFromPaper {
+            model.geometry.hoveredSource = nil
+            hoverFromPaper = false
+        }
+    }
+
     /// Select text the way a reader would (used by the `--select` test flag).
     func select(text: String) {
         guard let pdfView, let doc = pdfView.document, let model, let index = model.index,
@@ -141,7 +167,8 @@ struct PDFPane: NSViewRepresentable {
     let model: AppModel
 
     func makeNSView(context: Context) -> PDFView {
-        let view = PDFView()
+        let view = HoverPDFView()
+        view.controller = model.pdf
         view.displayMode = .singlePageContinuous
         view.displayDirection = .vertical
         view.autoScales = true
@@ -157,5 +184,30 @@ struct PDFPane: NSViewRepresentable {
     func updateNSView(_ view: PDFView, context: Context) {
         model.pdf.setDocument(model.document)
         model.pdf.apply(model.highlightSpecs)
+    }
+}
+
+/// A PDFView that reports pointer movement, so hovering a highlight can light up its beam.
+final class HoverPDFView: PDFView {
+    weak var controller: PDFController?
+    private var area: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let area { removeTrackingArea(area) }
+        let a = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                               owner: self, userInfo: nil)
+        addTrackingArea(a)
+        area = a
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        MainActor.assumeIsolated { controller?.hover(event) }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        MainActor.assumeIsolated { controller?.hover(event) }
     }
 }

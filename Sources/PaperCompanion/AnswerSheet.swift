@@ -165,8 +165,13 @@ struct QuoteSlip: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.white, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .shadow(color: .black.opacity(0.18), radius: 10, y: 3)
+                .background(.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
+                .onHover { inside in
+                    guard let sid = model.sourceID(for: block) else { return }
+                    if inside { model.geometry.hoveredSource = sid }
+                    else if model.geometry.hoveredSource == sid { model.geometry.hoveredSource = nil }
+                }
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("space")) } action: {
                     model.geometry.slipFrames[block.id] = $0
                 }

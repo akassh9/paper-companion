@@ -30,6 +30,8 @@ final class SpaceGeometry {
     var slipFrames: [UUID: CGRect] = [:]
     /// The visible part of the answer sheet in space coordinates.
     var sheetViewport: CGRect = .zero
+    /// The highlight whose beam is emphasized (the pointer is over its quote or its span in the paper).
+    var hoveredSource: UUID?
 }
 
 @MainActor

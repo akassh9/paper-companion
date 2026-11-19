@@ -28,7 +28,7 @@ The first time you ask a question, the app asks for your Claude API key and save
   (a JSON schema for prose / heading / quote / instrument blocks). The paper sits in a cached system prompt.
 - `AppModel.swift` holds threads. Compose starts a thread, Extend appends, Rewrite and Branch add versions.
 - Threads are saved per PDF (by file hash) in `~/Library/Application Support/Paper Companion/Threads/`.
-- `Beams.swift` draws ribbons beneath the glass sheet and glass beads on top.
+- `Beams.swift` draws thin beams from each highlight to its quote. They stay quiet until you point at a quote or its highlight.
 
 ## Test flags
 

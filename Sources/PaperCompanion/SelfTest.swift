@@ -57,5 +57,11 @@ enum DemoAnswer {
         else { return }
         let passage = Passage(span: span, text: index.text(of: span, in: doc), colorIndex: 3)
         model.finish(doc: ai, mode: .compose, question: ai.title, passages: [passage], threadID: nil)
+        // Test flag: `--hover-quote N` emphasizes the Nth quote's beam, as if the pointer were over it.
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--hover-quote"), args.indices.contains(i + 1), let n = Int(args[i + 1]),
+           let quotes = model.openThread?.current?.quoteBlocks, quotes.indices.contains(n - 1) {
+            model.geometry.hoveredSource = model.sourceID(for: quotes[n - 1])
+        }
     }
 }

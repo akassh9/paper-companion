@@ -28,9 +28,6 @@ struct SpaceView: View {
                         .padding(.bottom, 96)
                         .padding(.leading, 48)
 
-                    // Beams pass beneath the glass sheet.
-                    BeamRibbons(model: model)
-
                     // Earlier versions of the answer, stacked behind it as their own sheets.
                     if let thread = model.openThread {
                         HStack {
@@ -74,7 +71,8 @@ struct SpaceView: View {
                         }
                     }
 
-                    BeamBeads(model: model)
+                    // Beams sit above the glass, so each one reaches its white slip of paper.
+                    BeamRibbons(model: model)
                 } else {
                     WelcomeView(model: model)
                 }
