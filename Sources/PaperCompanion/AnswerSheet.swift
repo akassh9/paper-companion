@@ -16,33 +16,50 @@ struct AnswerSheet: View {
                     .padding(.top, 22)
                     .padding(.bottom, 10)
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if let version {
-                            Text(version.title)
-                                .font(.system(size: 26, weight: .bold))
-                                .foregroundStyle(.primary)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.bottom, 4)
-                            ForEach(version.blocks) { block in
-                                BlockView(model: model, block: block)
+                if let version, version.html != nil {
+                    // Claude's own page for this answer, in a sandboxed web view.
+                    AnswerWebView(model: model, version: version)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("space")) } action: {
+                            model.geometry.sheetViewport = $0
+                        }
+                        .overlay(alignment: .bottom) {
+                            if model.isComposing, model.openThreadID == thread.id {
+                                ComposingRow(model: model)
+                                    .padding(.horizontal, 18).padding(.vertical, 12)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                    .padding(12)
                             }
                         }
-                        if model.isComposing, model.openThreadID == thread.id {
-                            ComposingRow(model: model)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            if let version {
+                                Text(version.title)
+                                    .font(.system(size: 26, weight: .bold))
+                                    .foregroundStyle(.primary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(.bottom, 4)
+                                ForEach(version.blocks) { block in
+                                    BlockView(model: model, block: block)
+                                }
+                            }
+                            if model.isComposing, model.openThreadID == thread.id {
+                                ComposingRow(model: model)
+                            }
+                            if dropTargeted {
+                                Capsule().fill(Color.accentColor).frame(height: 2).padding(.top, 4)
+                            }
                         }
-                        if dropTargeted {
-                            Capsule().fill(Color.accentColor).frame(height: 2).padding(.top, 4)
-                        }
+                        .padding(.horizontal, 30)
+                        .padding(.top, 6)
+                        .padding(.bottom, 30)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding(.horizontal, 30)
-                    .padding(.top, 6)
-                    .padding(.bottom, 30)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .scrollIndicators(.never)
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("space")) } action: {
-                    model.geometry.sheetViewport = $0
+                    .scrollIndicators(.never)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("space")) } action: {
+                        model.geometry.sheetViewport = $0
+                    }
                 }
             }
             .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))

@@ -74,9 +74,9 @@ enum ClaudeError: LocalizedError {
     }
 }
 
-/// What came back from one question: the composed answer, plus the code Claude ran to get there.
+/// What came back from one question: the answer as HTML, plus the code Claude ran to get there.
 struct AgentResult {
-    var document: AIDocument
+    var html: String
     var code: [String]
 }
 
@@ -146,10 +146,7 @@ struct PaperAgent {
                 "model": ProcessInfo.processInfo.environment["PAPER_COMPANION_MODEL"] ?? model,
                 "max_tokens": 32000,
                 "stream": true,
-                "output_config": [
-                    "effort": "medium",
-                    "format": ["type": "json_schema", "schema": "__SCHEMA__"],
-                ],
+                "output_config": ["effort": "medium"],
                 "tools": Self.tools,
                 "system": system,
                 "messages": messages,
@@ -186,10 +183,13 @@ struct PaperAgent {
                     if type == "text" { text += block["text"] as? String ?? "" }
                     else if type != "thinking" { text = "" }
                 }
-                guard let doc = try? JSONDecoder().decode(AIDocument.self, from: Data(text.utf8)) else {
-                    throw ClaudeError.unreadable
+                var html = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                // Tolerate a code fence around the answer.
+                if html.hasPrefix("```") {
+                    html = html.replacingOccurrences(of: #"^```[a-zA-Z]*\n?|\n?```$"#, with: "", options: .regularExpression)
                 }
-                return AgentResult(document: doc, code: code)
+                guard !html.isEmpty else { throw ClaudeError.unreadable }
+                return AgentResult(html: html, code: code)
             }
         }
         log(transcript, seconds: Date().timeIntervalSince(started))
@@ -316,10 +316,7 @@ struct PaperAgent {
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2026-10-21", forHTTPHeaderField: "anthropic-version")
         // Sorted keys keep the bytes identical between requests, so the cached paper prefix is reused.
-        // The schema is spliced in as fixed text so its property order (the order Claude writes fields in)
-        // stays as written: title first, then each block's kind and text before anything else.
-        let json = String(decoding: try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]), as: UTF8.self)
-        request.httpBody = Data(json.replacingOccurrences(of: "\"__SCHEMA__\"", with: Self.schema).utf8)
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -408,35 +405,4 @@ struct PaperAgent {
            let err = obj["error"] as? [String: Any], let m = err["message"] as? String { return m }
         return String(data: data, encoding: .utf8) ?? "No details"
     }
-
-    // MARK: Output schema
-
-    /// One flat block shape with a `kind` field, written as ordered JSON text. (An `anyOf` of block shapes
-    /// made constrained decoding stick to whichever shape came first, and with `text` last Haiku sometimes
-    /// wrote empty blocks.)
-    static let schema = #"""
-    {"type":"object","additionalProperties":false,"required":["title","blocks"],"properties":{
-     "title":{"type":"string","description":"The reader's question as a short heading, in their words."},
-     "blocks":{"type":"array","items":{"type":"object","additionalProperties":false,
-      "required":["kind","text","page","location","subtitle"],"properties":{
-       "kind":{"type":"string","enum":["prose","quote","heading","figure"]},
-       "text":{"type":"string","description":"prose: the paragraph. quote: the exact words from the paper. heading: the title. figure: empty."},
-       "page":{"type":"integer","description":"quote: the page number as marked in the paper text. Other kinds: 0."},
-       "location":{"type":"string","description":"quote: where it sits, such as a section name or \"Figure 1 caption\". Other kinds: empty."},
-       "subtitle":{"type":"string","description":"heading: one line saying what the figure below shows. Other kinds: empty."},
-       "figure":{"type":"object","additionalProperties":false,
-        "description":"Only on a figure block, its own block right after the heading that introduces it. Leave out on every other kind.",
-        "required":["x_label","y_label","x_categories","series","basis","source"],"properties":{
-         "x_label":{"type":"string"},
-         "y_label":{"type":"string"},
-         "x_categories":{"type":"array","items":{"type":"string"},"description":"Names for a categorical x axis, where each point's x is an index into this list. Empty when x is numeric."},
-         "series":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["name","style","points"],"properties":{
-          "name":{"type":"string","description":"A short legend label, a few words."},
-          "style":{"type":"string","enum":["points","line","dashed","bars"],"description":"points: a scatter. line or dashed: points joined in x order (a fitted line needs only its two end points). bars: a bar per point."},
-          "points":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["x","y","label"],"properties":{
-           "x":{"type":"number"},"y":{"type":"number"},
-           "label":{"type":"string","description":"Short label drawn by the point, such as a country code. Empty for none."}}}}}}},
-         "basis":{"type":"string","enum":["paper","computed","read_off_figure"],"description":"paper: every number is printed in the paper. computed: you calculated some of it with code. read_off_figure: values estimated from a figure image."},
-         "source":{"type":"string","description":"Where the data comes from, in a few words, such as \"Appendix Table A2\" or \"Figure 3\". Details belong in the prose."}}}}}}}}
-    """#
 }

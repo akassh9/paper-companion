@@ -87,23 +87,17 @@ enum AskTest {
             let result = try await agent.run(system: system, user: user) { step in
                 print(String(format: "  [%5.1fs] %@", Date().timeIntervalSince(started), step))
             }
-            let ai = result.document
-            print("TITLE:", ai.title)
-            for b in ai.normalizedBlocks {
-                switch b.kind {
-                case "quote":
-                    let found = index.locate(b.text ?? "", preferredPage: b.page.map { $0 - 1 }) != nil
-                    print("QUOTE [\(found ? "found" : "MISSING")] p\(b.page ?? 0) \(b.location ?? ""): \(b.text ?? "")")
-                case "figure":
-                    guard let f = b.figure else { print("FIGURE: (empty)"); continue }
-                    print("FIGURE [\(f.basis), \(f.source)]: \(f.y_label) vs \(f.x_label) cats=\(f.x_categories)")
-                    for s in f.series {
-                        let pts = s.points.prefix(6).map { "\($0.label)(\(FigureView.format($0.x)),\(FigureView.format($0.y)))" }
-                        print("   \(s.style) \(s.name): \(s.points.count) pts \(pts.joined(separator: " "))")
-                    }
-                default:
-                    print(b.kind.uppercased() + ":", b.text ?? "", b.subtitle ?? "")
-                }
+            let html = result.html
+            print("TITLE:", AnswerHTML.title(of: html) ?? "(no h1)")
+            for tag in AnswerHTML.quoteTags(in: html) {
+                let found = index.locate(tag.text, preferredPage: tag.page.map { $0 - 1 }) != nil
+                print("QUOTE [\(found ? "found" : "MISSING")] p\(tag.page ?? 0) \(tag.location): \(tag.text.prefix(90))")
+            }
+            let tags = ["<script", "<canvas", "<svg", "<table", "<math", "<input", "<button", "paper.reveal", "paper.ask", "<figure"]
+            print("USES:", tags.filter { html.contains($0) }.joined(separator: " "), "| \(html.count) chars")
+            print("TEXT:", AnswerHTML.plainText(html).prefix(600).replacingOccurrences(of: "\n", with: " ⏎ "))
+            if let out = ProcessInfo.processInfo.environment["ASK_OUT"] {
+                try? html.write(toFile: out, atomically: true, encoding: .utf8)
             }
             print(String(format: "DONE in %.1fs, code blocks: %d", Date().timeIntervalSince(started), result.code.count))
             return 0

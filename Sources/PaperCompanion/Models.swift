@@ -109,6 +109,8 @@ struct AnswerVersion: Codable, Identifiable, Hashable {
     var title: String
     var blocks: [AnswerBlock]
     var createdAt = Date()
+    /// Answers Claude writes as HTML. `blocks` then holds only its quotes, for beams and highlights.
+    var html: String? = nil
 
     var quoteBlocks: [AnswerBlock] { blocks.filter(\.isLinkedQuote) }
     var sourceCount: Int { Set(quoteBlocks.compactMap(\.span)).count }

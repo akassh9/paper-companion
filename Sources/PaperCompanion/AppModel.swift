@@ -251,8 +251,8 @@ final class AppModel {
                 let result = try await agent.run(system: system, user: user) { [weak self] step in
                     self?.composingStep = step
                 }
-                finish(doc: result.document, mode: mode, question: q, passages: passages, threadID: existing?.id,
-                       code: result.code)
+                finishHTML(result.html, code: result.code, mode: mode, question: q, passages: passages,
+                           threadID: existing?.id)
             } catch let error as ClaudeError {
                 if case .badKey = error { showKeySheet = true }
                 errorMessage = error.localizedDescription
@@ -375,6 +375,96 @@ final class AppModel {
         save()
     }
 
+    /// Stores an answer Claude wrote as HTML. Each <paper-quote> is checked against the PDF, replaced with
+    /// the paper's exact words, and given a source color, so beams and highlights work as before.
+    func finishHTML(_ raw: String, code: [String], mode: ComposeMode, question: String, passages: [Passage], threadID: UUID?) {
+        guard let index else { return }
+        let base = threadID.flatMap { id in threads.first { $0.id == id }?.current }
+        var colorsInUse = passages.map(\.colorIndex)
+        var quoteColors: [SpanRef: Int] = [:]
+        if mode == .extend, let base {
+            colorsInUse += base.quoteBlocks.compactMap(\.colorIndex)
+            for b in base.quoteBlocks { if let s = b.span, let c = b.colorIndex { quoteColors[s] = c } }
+        }
+
+        // A quote is its own slip, so punctuation Claude put right after one would sit alone on a line.
+        let raw = raw.replacingOccurrences(of: #"(</paper-quote\s*>)\s*[.,;:]"#, with: "$1", options: .regularExpression)
+        var html = raw
+        var quotes: [AnswerBlock] = []
+        let tags = AnswerHTML.quoteTags(in: raw)
+        for tag in tags {
+            var block = AnswerBlock(kind: .quote, text: tag.text, location: tag.location)
+            if let span = index.locate(tag.text, preferredPage: tag.page.map { $0 - 1 }) {
+                if let document {
+                    let paperText = index.text(of: span, in: document)
+                    if !paperText.isEmpty { block.text = paperText }
+                }
+                block.span = span
+                if let p = passages.first(where: { $0.span.overlaps(span) }) {
+                    block.colorIndex = p.colorIndex
+                } else if let c = quoteColors.first(where: { $0.key.overlaps(span) })?.value {
+                    block.colorIndex = c
+                } else {
+                    let c = (0..<SourcePalette.rgb.count).first { !colorsInUse.contains($0) }
+                        ?? (colorsInUse.count % SourcePalette.rgb.count)
+                    colorsInUse.append(c)
+                    quoteColors[span] = c
+                    block.colorIndex = c
+                }
+            }
+            quotes.append(block)
+        }
+        for (tag, block) in zip(tags, quotes).reversed() {
+            html.replaceSubrange(tag.range, with: AnswerHTML.resolvedTag(block))
+        }
+        html += AnswerHTML.codeDisclosure(code)
+
+        var title = AnswerHTML.title(of: html) ?? question
+        title = title.prefix(1).uppercased() + title.dropFirst()
+
+        if let threadID, let i = threads.firstIndex(where: { $0.id == threadID }) {
+            let old = threads[i].current
+            var version: AnswerVersion
+            if mode == .extend, let old {
+                let oldHTML = old.html ?? Self.html(fromBlocks: old)
+                version = AnswerVersion(question: question, mode: mode, title: old.title,
+                                        blocks: old.quoteBlocks + quotes,
+                                        html: oldHTML + "\n<hr>\n" + AnswerHTML.demoteHeadings(html))
+            } else {
+                version = AnswerVersion(question: question, mode: mode, title: mode == .rewrite ? title : (old?.title ?? title),
+                                        blocks: quotes, html: html)
+            }
+            threads[i].passages = passages
+            threads[i].versions.append(version)
+            threads[i].currentVersion = threads[i].versions.count - 1
+            openThreadID = threadID
+        } else {
+            let version = AnswerVersion(question: question, mode: .compose, title: title, blocks: quotes, html: html)
+            threads.append(PaperThread(passages: passages, versions: [version], currentVersion: 0))
+            openThreadID = threads.last?.id
+        }
+        geometry.slipFrames = [:]
+        self.question = ""
+        selection = nil
+        pdf.clearSelection()
+        self.mode = .extend
+        save()
+    }
+
+    /// An older block-based answer as HTML, so a follow-up can extend it in the new form.
+    static func html(fromBlocks v: AnswerVersion) -> String {
+        var out = "<h1>\(AnswerHTML.escape(v.title))</h1>\n"
+        for b in v.blocks {
+            switch b.kind {
+            case .prose: out += "<p>\(AnswerHTML.escape(b.text))</p>\n"
+            case .heading: out += "<h2>\(AnswerHTML.escape(b.text))</h2>\n"
+            case .quote: out += AnswerHTML.resolvedTag(b) + "\n"
+            case .instrument, .figure: out += "<p><em>(Chart from an earlier version of the app.)</em></p>\n"
+            }
+        }
+        return out
+    }
+
     // MARK: Dragging a passage into the answer
 
     /// The reader dropped text from the paper onto the answer: add it as a quote in a new version.
@@ -392,6 +482,7 @@ final class AppModel {
         var version = current
         version.id = UUID()
         version.blocks.append(quote)
+        if let html = version.html { version.html = html + "\n" + AnswerHTML.resolvedTag(quote) }
         version.mode = .branch
         version.question = "Added a passage"
         version.createdAt = Date()
@@ -405,7 +496,7 @@ final class AppModel {
 
     func copyAnswerAsText() {
         guard let v = openThread?.current else { return }
-        let text = "# \(v.title)\n\n" + Prompts.render(v)
+        let text = v.html.map { AnswerHTML.plainText($0) } ?? ("# \(v.title)\n\n" + Prompts.render(v))
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }

@@ -148,6 +148,11 @@ final class PDFController: NSObject {
     }
 
     /// Scroll the paper to a span and flash it.
+    func go(to page: PDFPage) {
+        pdfView?.go(to: page)
+        layoutChanged()
+    }
+
     func reveal(_ span: SpanRef) {
         guard let pdfView, let page = pdfView.document?.page(at: span.page), let sel = page.selection(for: span.range) else { return }
         let r = sel.bounds(for: page)

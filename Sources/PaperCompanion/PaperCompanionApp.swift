@@ -49,6 +49,15 @@ struct PaperCompanionApp: App {
                             let text = args[j + 1]
                             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { model.pdf.select(text: text) }
                         }
+                        // Test flag: `--answer-html file.html` shows a saved answer page, without calling Claude.
+                        if let j = args.firstIndex(of: "--answer-html"), args.indices.contains(j + 1),
+                           let html = try? String(contentsOfFile: args[j + 1], encoding: .utf8) {
+                            model.persistenceEnabled = false
+                            model.threads = []
+                            model.openThreadID = nil
+                            model.finishHTML(html, code: ["# (test) code would appear here"], mode: .compose,
+                                             question: "Test", passages: [], threadID: nil)
+                        }
                         // Test flag: `--question "…"` asks it as a new thread (with any --select), without saving.
                         if let j = args.firstIndex(of: "--question"), args.indices.contains(j + 1) {
                             let q = args[j + 1]
