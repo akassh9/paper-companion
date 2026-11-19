@@ -37,5 +37,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-codesign --force --sign - "$APP" >/dev/null 2>&1
+# Ad-hoc signatures are otherwise identified by a hash of the exact binary, so every rebuild looked like a new
+# app to the Keychain and it asked for the API key again. A fixed designated requirement keeps the identity
+# the same across rebuilds, so "Always Allow" sticks.
+codesign --force --sign - --identifier app.papercompanion.mac \
+  --requirements '=designated => identifier "app.papercompanion.mac"' "$APP"
 echo "Built $APP"
