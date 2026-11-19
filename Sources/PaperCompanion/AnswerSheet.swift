@@ -10,17 +10,6 @@ struct AnswerSheet: View {
     var body: some View {
         let version = thread.current
         ZStack(alignment: .top) {
-            // Earlier versions, stacked behind like sheets.
-            let behind = min(2, max(0, thread.versions.count - 1))
-            ForEach(0..<behind, id: \.self) { i in
-                let depth = CGFloat(behind - i)
-                RoundedRectangle(cornerRadius: 26, style: .continuous)
-                    .fill(.white.opacity(0.03 + 0.03 * Double(i)))
-                    .glassEffect(.regular.tint(.white.opacity(0.02)), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-                    .padding(.horizontal, 10 * depth)
-                    .offset(y: -10 * depth)
-            }
-
             VStack(alignment: .leading, spacing: 0) {
                 header(version)
                     .padding(.horizontal, 30)
@@ -32,7 +21,7 @@ struct AnswerSheet: View {
                         if let version {
                             Text(version.title)
                                 .font(.system(size: 26, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.96))
+                                .foregroundStyle(.primary)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .padding(.bottom, 4)
                             ForEach(version.blocks) { block in
@@ -56,9 +45,7 @@ struct AnswerSheet: View {
                     model.geometry.sheetViewport = $0
                 }
             }
-            .glassEffect(.regular.tint(Color(red: 0.05, green: 0.06, blue: 0.09).opacity(0.35)),
-                         in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .shadow(color: .black.opacity(0.35), radius: 40, y: 20)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         }
         .dropDestination(for: String.self) { items, _ in
             guard let text = items.first else { return false }
@@ -72,15 +59,15 @@ struct AnswerSheet: View {
         HStack(spacing: 6) {
             Image(systemName: "sparkles")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white.opacity(0.9))
+                .foregroundStyle(.primary)
             Text("Answer")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.9))
+                .foregroundStyle(.primary)
             if let version {
                 let n = version.sourceCount
                 Text(n == 1 ? "1 source" : "\(n) sources")
                     .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(.secondary)
             }
             Spacer()
             if thread.versions.count > 1 {
@@ -91,14 +78,14 @@ struct AnswerSheet: View {
                     Text("\(thread.currentVersion + 1) of \(thread.versions.count)")
                         .font(.system(size: 12, weight: .medium))
                         .monospacedDigit()
-                        .foregroundStyle(.white.opacity(0.55))
+                        .foregroundStyle(.secondary)
                     Button { model.showVersion(1) } label: { Image(systemName: "chevron.right") }
                         .disabled(thread.currentVersion >= thread.versions.count - 1)
                         .help("Later version")
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(.secondary)
                 .padding(.trailing, 10)
             }
             Group {
@@ -118,7 +105,7 @@ struct AnswerSheet: View {
             }
             .buttonStyle(.plain)
             .font(.system(size: 14))
-            .foregroundStyle(.white.opacity(0.8))
+            .foregroundStyle(.secondary)
             .padding(.leading, 8)
         }
     }
@@ -135,7 +122,7 @@ struct BlockView: View {
             Text(markdown(block.text))
                 .font(.system(size: 15))
                 .lineSpacing(3)
-                .foregroundStyle(.white.opacity(0.8))
+                .foregroundStyle(Color.primary.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
                 .padding(.top, 4)
@@ -143,9 +130,9 @@ struct BlockView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(block.text)
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .foregroundStyle(.primary)
                 if let s = block.subtitle, !s.isEmpty {
-                    Text(s).font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
+                    Text(s).font(.system(size: 12)).foregroundStyle(.secondary)
                 }
             }
             .padding(.top, 14)
@@ -209,7 +196,7 @@ struct QuoteSlip: View {
                     Image(systemName: "arrow.up.right").font(.system(size: 9, weight: .semibold))
                 }
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.5))
+                .foregroundStyle(.secondary)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -220,7 +207,7 @@ struct QuoteSlip: View {
                 Text("Couldn't find this exact text in the paper")
             }
             .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(.white.opacity(0.45))
+            .foregroundStyle(.secondary)
         }
     }
 
@@ -240,13 +227,13 @@ struct ComposingRow: View {
             if model.mode != .extend || model.openThread == nil {
                 Text(model.composingQuestion)
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .foregroundStyle(.primary)
             }
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
                 Text(model.composingProgress == 0 ? "Reading the paper…" : "Composing from the paper…")
                     .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(.top, 10)
@@ -280,19 +267,19 @@ struct InstrumentView: View {
                         }
                     }
                     RuleMark(x: .value(instrument.xLabel, instrument.xValues[i]))
-                        .foregroundStyle(.white.opacity(0.25))
+                        .foregroundStyle(Color.secondary)
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
                 }
                 .chartForegroundStyleScale(domain: instrument.series.map(\.name),
                                            range: Array(Self.seriesColors.prefix(max(1, instrument.series.count))))
                 .chartLegend(.hidden)
                 .chartXAxis {
-                    AxisMarks { _ in AxisValueLabel().foregroundStyle(.white.opacity(0.4)) }
+                    AxisMarks { _ in AxisValueLabel().foregroundStyle(Color.secondary) }
                 }
                 .chartYAxis {
                     AxisMarks(position: .leading) { _ in
-                        AxisGridLine().foregroundStyle(.white.opacity(0.08))
-                        AxisValueLabel().foregroundStyle(.white.opacity(0.4))
+                        AxisGridLine().foregroundStyle(Color.primary.opacity(0.1))
+                        AxisValueLabel().foregroundStyle(Color.secondary)
                     }
                 }
                 .frame(height: 140)
@@ -310,7 +297,7 @@ struct InstrumentView: View {
                             .foregroundStyle(Self.seriesColors[si % Self.seriesColors.count])
                             Text("\(series.name) at \(instrument.xValues[i])")
                                 .font(.system(size: 12))
-                                .foregroundStyle(.white.opacity(0.5))
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -319,9 +306,9 @@ struct InstrumentView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text(instrument.xLabel).foregroundStyle(.white.opacity(0.6))
+                    Text(instrument.xLabel).foregroundStyle(.secondary)
                     Spacer()
-                    Text(instrument.xValues[i]).fontWeight(.semibold).foregroundStyle(.white.opacity(0.9))
+                    Text(instrument.xValues[i]).fontWeight(.semibold).foregroundStyle(.primary)
                 }
                 .font(.system(size: 13))
                 Slider(value: $index.animation(.snappy), in: 0...Double(max(1, instrument.xValues.count - 1)), step: 1)
@@ -332,11 +319,11 @@ struct InstrumentView: View {
                     }
                 }
                 .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.4))
+                .foregroundStyle(.tertiary)
             }
         }
         .padding(17)
-        .background(.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .padding(.vertical, 4)
         .onAppear {
             if !didSet { index = Double(instrument.startIndex); didSet = true }

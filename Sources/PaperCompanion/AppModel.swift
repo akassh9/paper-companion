@@ -55,6 +55,10 @@ final class AppModel {
     var errorMessage: String?
     var showKeySheet = false
     var showThreadList = false
+    /// View ▸ Dim Behind Window. Off: the window is clear and the glass shows the real desktop.
+    var dimBackdrop = UserDefaults.standard.bool(forKey: "dimBackdrop") {
+        didSet { UserDefaults.standard.set(dimBackdrop, forKey: "dimBackdrop") }
+    }
 
     let geometry = SpaceGeometry()
     let pdf = PDFController()

@@ -10,7 +10,11 @@ struct SpaceView: View {
             let pdfWidth: CGFloat = min(820, max(520, geo.size.width - sheetWidth - 64 - 64 - 160))
 
             ZStack(alignment: .topLeading) {
-                SpaceBackground()
+                if model.dimBackdrop { SpaceBackdrop() }
+                // A faint strip along the top, so the window can still be dragged.
+                Color.primary.opacity(0.01)
+                    .frame(height: 40)
+                    .gesture(WindowDragGesture())
 
                 if model.document != nil {
                     // Paper
@@ -27,35 +31,50 @@ struct SpaceView: View {
                     // Beams pass beneath the glass sheet.
                     BeamRibbons(model: model)
 
-                    // Answer (AI, glass)
-                    HStack {
-                        Spacer()
-                        Group {
-                            if let thread = model.openThread {
-                                AnswerSheet(model: model, thread: thread)
-                            } else {
-                                GuideSheet(model: model)
-                            }
+                    // Earlier versions of the answer, stacked behind it as their own sheets.
+                    if let thread = model.openThread {
+                        HStack {
+                            Spacer()
+                            VersionStack(count: thread.versions.count).frame(width: sheetWidth)
                         }
-                        .frame(width: sheetWidth)
+                        .padding(.top, 40)
+                        .padding(.bottom, 100)
+                        .padding(.trailing, 40)
                     }
-                    .padding(.top, 40)
-                    .padding(.bottom, 100)
-                    .padding(.trailing, 40)
+
+                    // Everything the AI makes is Liquid Glass, grouped so the shapes render together.
+                    GlassEffectContainer(spacing: 24) {
+                        ZStack(alignment: .topLeading) {
+                            HStack {
+                                Spacer()
+                                Group {
+                                    if let thread = model.openThread {
+                                        AnswerSheet(model: model, thread: thread)
+                                    } else {
+                                        GuideSheet(model: model)
+                                    }
+                                }
+                                .frame(width: sheetWidth)
+                            }
+                            .padding(.top, 40)
+                            .padding(.bottom, 100)
+                            .padding(.trailing, 40)
+
+                            TopBar(model: model)
+                                .padding(.top, 12)
+                                .padding(.leading, 84)
+
+                            VStack {
+                                Spacer()
+                                QuestionBar(model: model)
+                                    .frame(maxWidth: 820)
+                                    .padding(.bottom, 22)
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                    }
 
                     BeamBeads(model: model)
-
-                    TopBar(model: model)
-                        .padding(.top, 12)
-                        .padding(.leading, 84)
-
-                    VStack {
-                        Spacer()
-                        QuestionBar(model: model)
-                            .frame(maxWidth: 820)
-                            .padding(.bottom, 22)
-                    }
-                    .frame(maxWidth: .infinity)
                 } else {
                     WelcomeView(model: model)
                 }
@@ -63,27 +82,57 @@ struct SpaceView: View {
             .coordinateSpace(.named("space"))
         }
         .ignoresSafeArea()
-        .preferredColorScheme(.dark)
+        .background(TransparentWindow())
+        .containerBackground(.clear, for: .window)
         .sheet(isPresented: $model.showKeySheet) { APIKeySheet(model: model) }
     }
 }
 
-/// A dark, softly lit space behind everything (stands in for a blurred wallpaper).
-struct SpaceBackground: View {
+/// Optional (View ▸ Dim Behind Window): a see-through wash that calms a busy desktop. Off by default,
+/// so the window is fully transparent and the glass shows whatever is really behind it.
+struct SpaceBackdrop: View {
     var body: some View {
-        ZStack {
-            MeshGradient(
-                width: 3, height: 3,
-                points: [[0, 0], [0.5, 0], [1, 0], [0, 0.5], [0.55, 0.45], [1, 0.5], [0, 1], [0.5, 1], [1, 1]],
-                colors: [
-                    Color(red: 0.05, green: 0.08, blue: 0.16), Color(red: 0.08, green: 0.12, blue: 0.24), Color(red: 0.10, green: 0.10, blue: 0.20),
-                    Color(red: 0.06, green: 0.14, blue: 0.26), Color(red: 0.14, green: 0.22, blue: 0.40), Color(red: 0.20, green: 0.14, blue: 0.28),
-                    Color(red: 0.04, green: 0.07, blue: 0.13), Color(red: 0.07, green: 0.12, blue: 0.22), Color(red: 0.09, green: 0.08, blue: 0.16),
-                ]
-            )
-            RadialGradient(colors: [.clear, .black.opacity(0.45)], center: .center, startRadius: 200, endRadius: 1200)
+        Rectangle()
+            .fill(.background.opacity(0.55))
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+    }
+}
+
+/// Makes the hosting NSWindow transparent, so Liquid Glass samples the desktop and other windows.
+struct TransparentWindow: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { configure(view.window) }
+        return view
+    }
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async { configure(view.window) }
+    }
+    private func configure(_ window: NSWindow?) {
+        guard let window, window.isOpaque else { return }
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+    }
+}
+
+/// Earlier versions of the answer: glass sheets peeking out above the current one.
+struct VersionStack: View {
+    let count: Int
+    var body: some View {
+        let behind = min(2, max(0, count - 1))
+        ZStack(alignment: .top) {
+            ForEach(0..<behind, id: \.self) { i in
+                let depth = CGFloat(behind - i)
+                Color.clear
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                    .opacity(0.55 + 0.2 * Double(i))
+                    .padding(.horizontal, 10 * depth)
+                    .offset(y: -10 * depth)
+            }
         }
-        .ignoresSafeArea()
+        .allowsHitTesting(false)
     }
 }
 
@@ -121,12 +170,12 @@ struct TopBar: View {
                         .frame(maxWidth: 320, alignment: .leading)
                     Text(model.threads.count == 1 ? "1 thread" : "\(model.threads.count) threads")
                         .font(.system(size: 13))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(.secondary)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(.secondary)
                 }
-                .foregroundStyle(.white.opacity(0.92))
+                .foregroundStyle(.primary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
                 .contentShape(Capsule())
@@ -150,11 +199,11 @@ struct GuideSheet: View {
                 Image(systemName: "sparkles")
                 Text("Ask the paper").font(.system(size: 13, weight: .semibold))
             }
-            .foregroundStyle(.white.opacity(0.9))
+            .foregroundStyle(.primary)
 
             Text("Answers here are built from the paper itself.")
                 .font(.system(size: 22, weight: .bold))
-                .foregroundStyle(.white.opacity(0.94))
+                .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: 14) {
@@ -172,8 +221,7 @@ struct GuideSheet: View {
         }
         .padding(30)
         .frame(maxHeight: .infinity, alignment: .top)
-        .glassEffect(.regular.tint(Color(red: 0.05, green: 0.06, blue: 0.09).opacity(0.35)),
-                     in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
     }
 
     private func step(_ n: Int, _ title: String, _ detail: String) -> some View {
@@ -181,11 +229,11 @@ struct GuideSheet: View {
             Text("\(n)")
                 .font(.system(size: 13, weight: .semibold))
                 .monospacedDigit()
-                .foregroundStyle(.white.opacity(0.5))
+                .foregroundStyle(.secondary)
                 .frame(width: 14)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 15, weight: .medium)).foregroundStyle(.white.opacity(0.9))
-                Text(detail).font(.system(size: 13)).foregroundStyle(.white.opacity(0.5))
+                Text(title).font(.system(size: 15, weight: .medium)).foregroundStyle(.primary)
+                Text(detail).font(.system(size: 13)).foregroundStyle(.secondary)
             }
         }
     }
@@ -199,13 +247,13 @@ struct WelcomeView: View {
         VStack(spacing: 18) {
             Image(systemName: "doc.text.magnifyingglass")
                 .font(.system(size: 44, weight: .light))
-                .foregroundStyle(.white.opacity(0.85))
+                .foregroundStyle(.primary)
             Text("Read a paper with Claude")
                 .font(.system(size: 26, weight: .bold))
             Text("Open a PDF, select a passage, and ask about it.\nAnswers are composed from the paper's own words.")
                 .font(.system(size: 15))
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(.secondary)
             HStack(spacing: 12) {
                 Button("Open a PDF…") { model.presentOpenPanel() }
                     .buttonStyle(.glassProminent)

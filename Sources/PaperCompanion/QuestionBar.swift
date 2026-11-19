@@ -91,11 +91,11 @@ struct QuestionBar: View {
             Image(systemName: icon).font(.system(size: 11, weight: .semibold))
             Text(label).font(.system(size: 13, weight: .medium)).lineLimit(1)
         }
-        .foregroundStyle(.white.opacity(0.9))
+        .foregroundStyle(.primary)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .frame(maxWidth: 220)
-        .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .help(model.selection?.text ?? "")
     }
 }

@@ -4,6 +4,11 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        // Test flag: `--appearance dark|light` previews the app in a mode other than the Mac's own.
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--appearance"), args.indices.contains(i + 1) {
+            NSApp.appearance = NSAppearance(named: args[i + 1] == "dark" ? .darkAqua : .aqua)
+        }
         NSApp.activate(ignoringOtherApps: true)
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -52,6 +57,9 @@ struct PaperCompanionApp: App {
                 Button("Open PDF…") { model.presentOpenPanel() }
                     .keyboardShortcut("o")
                 Button("Open Sample Paper") { model.openSample() }
+            }
+            CommandGroup(after: .toolbar) {
+                Toggle("Dim Behind Window", isOn: Binding(get: { model.dimBackdrop }, set: { model.dimBackdrop = $0 }))
             }
             CommandGroup(after: .appSettings) {
                 Button("Claude API Key…") { model.showKeySheet = true }
