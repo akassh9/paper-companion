@@ -122,11 +122,11 @@ enum AnswerHTML {
         :root { color-scheme: light dark;
           --text: rgba(0,0,0,.86); --primary: #000; --secondary: rgba(0,0,0,.52); --tertiary: rgba(0,0,0,.3);
           --fill: rgba(0,0,0,.045); --fill-strong: rgba(0,0,0,.08); --separator: rgba(0,0,0,.1); --grid: rgba(0,0,0,.07);
-          --accent: #0a84ff; --c1:#0a84ff; --c2:#ff9500; --c3:#30b0c7; --c4:#ff2d55; --c5:#af52de; --c6:#34c759; --c7:#8e8e93;
+          --surface: #fff; --accent: #0a84ff; --c1:#0a84ff; --c2:#ff9500; --c3:#30b0c7; --c4:#ff2d55; --c5:#af52de; --c6:#34c759; --c7:#8e8e93;
           --paper-font: "\(paperFont)", "Times New Roman", serif; }
         @media (prefers-color-scheme: dark) { :root {
           --text: rgba(255,255,255,.88); --primary: #fff; --secondary: rgba(255,255,255,.55); --tertiary: rgba(255,255,255,.32);
-          --fill: rgba(255,255,255,.06); --fill-strong: rgba(255,255,255,.1); --separator: rgba(255,255,255,.12); --grid: rgba(255,255,255,.08); } }
+          --fill: rgba(255,255,255,.06); --fill-strong: rgba(255,255,255,.1); --separator: rgba(255,255,255,.12); --grid: rgba(255,255,255,.08); --surface: rgba(255,255,255,.2); } }
         html, body { background: transparent; margin: 0; }
         body { font: 15px/1.55 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--text); padding: 4px 30px 56px;
           -webkit-font-smoothing: antialiased; overflow-wrap: break-word; }
@@ -158,6 +158,30 @@ enum AnswerHTML {
         .pq-source { display: flex; width: fit-content; gap: 5px; align-items: center; font: 500 12px -apple-system, sans-serif;
           color: var(--secondary); background: none; padding: 0; margin: 0 0 12px; }
         .pq-source:hover { background: none; color: var(--text); }
+        /* Patterns Claude is given in the prompt. Calm, native, no colored boxes or side bars. */
+        .card { background: var(--fill); border-radius: 14px; padding: 14px 16px; margin: 14px 0; }
+        .card > :first-child { margin-top: 0; } .card > :last-child { margin-bottom: 0; }
+        .card + .card { margin-top: -4px; }
+        .control { display: grid; grid-template-columns: 1fr auto; align-items: baseline; row-gap: 2px; margin: 0 0 12px; }
+        .control label { font-size: 13px; color: var(--secondary); }
+        .control output { font: 600 13px -apple-system, sans-serif; font-variant-numeric: tabular-nums; color: var(--primary); }
+        .control input[type=range] { grid-column: 1 / -1; margin: 4px 0 0; }
+        output { font-variant-numeric: tabular-nums; }
+        .segmented { display: flex; gap: 2px; padding: 2px; background: var(--fill-strong); border-radius: 8px; margin: 0 0 12px; }
+        .segmented button { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+          background: transparent; border-radius: 6px; padding: 4px 8px; font-size: 12.5px; }
+        .segmented button:hover { background: var(--fill); }
+        .segmented button.on, .segmented button[aria-pressed=true] { background: var(--surface); color: var(--primary);
+          box-shadow: 0 1px 2px rgba(0,0,0,.12), 0 0 0 0.5px rgba(0,0,0,.04); }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 12px 14px; margin: 4px 0 12px; }
+        .stat { display: flex; flex-direction: column; gap: 1px; }
+        .stat .value { white-space: nowrap; font: 600 24px/1.15 -apple-system, sans-serif; font-variant-numeric: tabular-nums; color: var(--primary);
+          letter-spacing: -0.3px; }
+        .stat .label { font-size: 12px; color: var(--secondary); }
+        .chart { position: relative; height: 240px; margin: 4px 0; }
+        .note { font-size: 13px; line-height: 1.5; color: var(--secondary); }
+        .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; }
+        .muted { color: var(--secondary); } .num { font-variant-numeric: tabular-nums; }
         details.pc-code { margin-top: 22px; font-size: 12px; color: var(--secondary); }
         details.pc-code summary { cursor: default; font-weight: 500; }
         details.pc-code pre { font: 11px/1.45 ui-monospace, Menlo, monospace; color: var(--text); background: var(--fill);
