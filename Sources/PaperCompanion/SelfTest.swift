@@ -65,3 +65,40 @@ enum DemoAnswer {
         }
     }
 }
+
+/// `PaperCompanion --ask <pdf> <question> [selected text]`: sends one real question through the same prompt and
+/// client the app uses, then prints the blocks and whether each quote was found. Uses the Keychain key.
+enum AskTest {
+    static func run(args: [String]) async -> Int32 {
+        guard args.count >= 2, let doc = PDFDocument(url: URL(fileURLWithPath: args[0])) else { print("usage: --ask <pdf> <question> [selection]"); return 1 }
+        guard let key = APIKeyStore.read() ?? ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] else { print("no key"); return 1 }
+        let index = PaperIndex(document: doc, fallbackTitle: "paper")
+        var passages: [Passage] = []
+        if args.count >= 3 {
+            guard let span = index.locate(args[2], preferredPage: nil) else { print("selection not found"); return 1 }
+            passages = [Passage(span: span, text: index.text(of: span, in: doc), colorIndex: 0)]
+        }
+        let system = Prompts.system(paperTitle: index.title, paperText: index.promptText)
+        let user = Prompts.user(mode: .compose, question: args[1], passages: passages, thread: nil)
+        do {
+            let ai = try await ClaudeClient(apiKey: key).compose(system: system, user: user) { _ in }
+            print("TITLE:", ai.title)
+            for b in ai.normalizedBlocks {
+                switch b.kind {
+                case "quote":
+                    let found = index.locate(b.text ?? "", preferredPage: b.page.map { $0 - 1 }) != nil
+                    print("QUOTE [\(found ? "found" : "MISSING")] p\(b.page ?? 0) \(b.location ?? ""): \(b.text ?? "")")
+                case "instrument":
+                    let c = b.chart
+                    print("CHART:", c?.x_label ?? "", c?.x_values ?? [], c?.series.map { "\($0.name)=\($0.values)" } ?? [])
+                default:
+                    print(b.kind.uppercased() + ":", b.text ?? "", b.subtitle ?? "")
+                }
+            }
+            return 0
+        } catch {
+            print("ERROR:", error.localizedDescription)
+            return 1
+        }
+    }
+}

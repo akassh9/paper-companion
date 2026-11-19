@@ -12,6 +12,14 @@ struct AIDocument: Decodable {
         var x_values: [String]?
         var series: [Series]?
         var start_index: Int?
+        /// Claude puts chart data here; the flat fields above are kept for the built-in demo answer.
+        var chart: Chart?
+    }
+    struct Chart: Decodable {
+        var x_label: String
+        var x_values: [String]
+        var series: [Series]
+        var start_index: Int
     }
     struct Series: Decodable {
         var name: String
@@ -20,6 +28,18 @@ struct AIDocument: Decodable {
     }
     var title: String
     var blocks: [Block]
+
+    /// Blocks with any chart data split out into its own instrument block. Haiku sometimes attaches the chart
+    /// to the heading that introduces it instead of writing a separate instrument block.
+    var normalizedBlocks: [Block] {
+        blocks.flatMap { b -> [Block] in
+            guard b.kind != "instrument", let chart = b.chart else { return [b] }
+            var plain = b
+            plain.chart = nil
+            let inst = Block(kind: "instrument", chart: chart)
+            return [plain, inst]
+        }
+    }
 }
 
 enum ClaudeError: LocalizedError {
@@ -44,45 +64,41 @@ enum ClaudeError: LocalizedError {
 
 /// Calls the Claude Messages API over HTTPS. Swift has no official Anthropic SDK, so this is raw HTTP.
 struct ClaudeClient {
-    static let model = "claude-opus-5-5"
+    static let model = "claude-haiku-5-5"
     let apiKey: String
 
-    /// Streams the response and returns the parsed document. `progress` gets the running count of characters.
-    func compose(system: [[String: Any]], user: String, progress: @escaping @MainActor (Int) -> Void) async throws -> AIDocument {
-        do {
-            return try await compose(system: system, user: user, useFallbacks: true, progress: progress)
-        } catch ClaudeError.http(400, let message) where message.localizedCaseInsensitiveContains("fallback") {
-            // Older API surfaces may not accept server-side fallbacks; retry once without them.
-            return try await compose(system: system, user: user, useFallbacks: false, progress: progress)
-        }
+    /// The last response, raw, for debugging: ~/Library/Application Support/Paper Companion/Logs/last-response.json
+    static var logFolder: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Paper Companion/Logs", isDirectory: true)
     }
 
-    private func compose(system: [[String: Any]], user: String, useFallbacks: Bool,
-                         progress: @escaping @MainActor (Int) -> Void) async throws -> AIDocument {
+    /// Streams the response and returns the parsed document. `progress` gets the running count of characters.
+    /// Claude Haiku 5.5 has no server-side refusal fallback, so a refusal surfaces as `.refused`.
+    func compose(system: [[String: Any]], user: String, progress: @escaping @MainActor (Int) -> Void) async throws -> AIDocument {
         var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
         request.httpMethod = "POST"
         request.timeoutInterval = 600
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2026-10-21", forHTTPHeaderField: "anthropic-version")
-        // Server-side fallback: if a safety classifier declines, the API retries on a fallback model.
-        if useFallbacks {
-            request.setValue("server-side-fallback-2026-07-01", forHTTPHeaderField: "anthropic-beta")
-        }
 
-        var body: [String: Any] = [
+        let body: [String: Any] = [
             "model": Self.model,
             "max_tokens": 16000,
             "stream": true,
             "output_config": [
                 "effort": "medium",
-                "format": ["type": "json_schema", "schema": Self.schema],
+                "format": ["type": "json_schema", "schema": "__SCHEMA__"],
             ],
             "system": system,
             "messages": [["role": "user", "content": user]],
         ]
-        if useFallbacks { body["fallbacks"] = "default" }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // Sorted keys keep the bytes identical between requests, so the cached paper prefix is reused.
+        // The schema is spliced in as fixed text so its property order (which is the order Claude writes
+        // fields in) stays as written: title first, then each block's kind and text before anything else.
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]), as: UTF8.self)
+        request.httpBody = Data(json.replacingOccurrences(of: "\"__SCHEMA__\"", with: Self.schema).utf8)
 
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -93,9 +109,11 @@ struct ClaudeClient {
             throw ClaudeError.http(status, Self.errorMessage(data))
         }
 
-        // Server-sent events. Keep only text from the last model that ran (a fallback restarts the answer).
+        // Server-sent events. Only text deltas make up the answer (thinking blocks are skipped).
         var text = ""
         var stopReason: String?
+        var usage: [String: Any] = [:]
+        let started = Date()
         for try await line in bytes.lines {
             guard line.hasPrefix("data:") else { continue }
             let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
@@ -105,9 +123,9 @@ struct ClaudeClient {
             else { continue }
 
             switch type {
-            case "content_block_start":
-                if let block = event["content_block"] as? [String: Any], block["type"] as? String == "fallback" {
-                    text = ""
+            case "message_start":
+                if let m = event["message"] as? [String: Any], let u = m["usage"] as? [String: Any] {
+                    usage.merge(u) { $1 }
                 }
             case "content_block_delta":
                 if let delta = event["delta"] as? [String: Any], delta["type"] as? String == "text_delta",
@@ -118,6 +136,7 @@ struct ClaudeClient {
                 }
             case "message_delta":
                 if let delta = event["delta"] as? [String: Any], let r = delta["stop_reason"] as? String { stopReason = r }
+                if let u = event["usage"] as? [String: Any] { usage.merge(u) { $1 } }
             case "error":
                 let message = (event["error"] as? [String: Any])?["message"] as? String ?? "Unknown error"
                 throw ClaudeError.http(0, message)
@@ -126,12 +145,24 @@ struct ClaudeClient {
             }
         }
 
+        Self.log(user: user, text: text, stopReason: stopReason, usage: usage, seconds: Date().timeIntervalSince(started))
         if stopReason == "refusal" { throw ClaudeError.refused }
         if stopReason == "max_tokens" { throw ClaudeError.truncated }
         guard let data = text.data(using: .utf8),
               let doc = try? JSONDecoder().decode(AIDocument.self, from: data)
         else { throw ClaudeError.unreadable }
         return doc
+    }
+
+    private static func log(user: String, text: String, stopReason: String?, usage: [String: Any], seconds: Double) {
+        let entry: [String: Any] = [
+            "model": model, "seconds": (seconds * 10).rounded() / 10, "stop_reason": stopReason ?? "",
+            "usage": usage, "user_message": user,
+            "response": (try? JSONSerialization.jsonObject(with: Data(text.utf8))) ?? text,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: entry, options: [.prettyPrinted, .sortedKeys]) else { return }
+        try? FileManager.default.createDirectory(at: logFolder, withIntermediateDirectories: true)
+        try? data.write(to: logFolder.appendingPathComponent("last-response.json"))
     }
 
     private static func errorMessage(_ data: Data) -> String {
@@ -142,26 +173,25 @@ struct ClaudeClient {
 
     // MARK: Output schema
 
-    static let schema: [String: Any] = {
-        func obj(_ props: [String: Any]) -> [String: Any] {
-            ["type": "object", "additionalProperties": false, "properties": props, "required": Array(props.keys).sorted()]
-        }
-        let str: [String: Any] = ["type": "string"]
-        let int: [String: Any] = ["type": "integer"]
-        let prose = obj(["kind": ["type": "string", "enum": ["prose"]], "text": str])
-        let heading = obj(["kind": ["type": "string", "enum": ["heading"]], "text": str, "subtitle": str])
-        let quote = obj(["kind": ["type": "string", "enum": ["quote"]], "text": str, "page": int, "location": str])
-        let series = obj(["name": str, "unit": str, "values": ["type": "array", "items": ["type": "number"]]])
-        let instrument = obj([
-            "kind": ["type": "string", "enum": ["instrument"]],
-            "x_label": str,
-            "x_values": ["type": "array", "items": str],
-            "series": ["type": "array", "items": series],
-            "start_index": int,
-        ])
-        return obj([
-            "title": str,
-            "blocks": ["type": "array", "items": ["anyOf": [prose, heading, quote, instrument]]],
-        ])
-    }()
+    /// One flat block shape with a `kind` field, written as ordered JSON text. (An `anyOf` of four block shapes
+    /// made constrained decoding stick to whichever shape came first: answers came back all prose or all quotes.
+    /// And with `text` last, Haiku sometimes wrote empty blocks.)
+    static let schema = #"""
+    {"type":"object","additionalProperties":false,"required":["title","blocks"],"properties":{
+     "title":{"type":"string","description":"The reader's question as a short heading, in their words."},
+     "blocks":{"type":"array","items":{"type":"object","additionalProperties":false,
+      "required":["kind","text","page","location","subtitle"],"properties":{
+       "kind":{"type":"string","enum":["prose","quote","heading","instrument"]},
+       "text":{"type":"string","description":"prose: the paragraph. quote: the exact words from the paper. heading: the title. instrument: empty."},
+       "page":{"type":"integer","description":"quote: the page number as marked in the paper text. Other kinds: 0."},
+       "location":{"type":"string","description":"quote: where it sits, such as a section name or \"Figure 1 caption\". Other kinds: empty."},
+       "subtitle":{"type":"string","description":"heading: one line saying what the chart below shows. Other kinds: empty."},
+       "chart":{"type":"object","additionalProperties":false,"description":"Only on an instrument block, its own block right after the heading that introduces it. Leave out on every other kind.",
+        "required":["x_label","x_values","series","start_index"],"properties":{
+         "x_label":{"type":"string"},
+         "x_values":{"type":"array","items":{"type":"string"}},
+         "series":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["name","unit","values"],
+          "properties":{"name":{"type":"string"},"unit":{"type":"string"},"values":{"type":"array","items":{"type":"number"}}}}},
+         "start_index":{"type":"integer"}}}}}}}}
+    """#
 }

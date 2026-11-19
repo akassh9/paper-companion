@@ -254,6 +254,9 @@ final class AppModel {
 
     func finish(doc: AIDocument, mode: ComposeMode, question: String, passages: [Passage], threadID: UUID?) {
         guard let index else { return }
+        // Claude keeps the reader's wording for the title, which is often all lowercase.
+        var doc = doc
+        doc.title = doc.title.prefix(1).uppercased() + doc.title.dropFirst()
         var colorsInUse = passages.map(\.colorIndex)
         var newBlocks: [AnswerBlock] = []
 
@@ -270,12 +273,12 @@ final class AppModel {
             if let s = b.span, let c = b.colorIndex { quoteColors[s] = c }
         }
 
-        for b in doc.blocks {
+        for b in doc.normalizedBlocks {
             switch b.kind {
             case "prose":
                 if let t = b.text, !t.isEmpty { newBlocks.append(AnswerBlock(kind: .prose, text: t)) }
             case "heading":
-                newBlocks.append(AnswerBlock(kind: .heading, text: b.text ?? "", subtitle: b.subtitle))
+                newBlocks.append(AnswerBlock(kind: .heading, text: b.text ?? "", subtitle: b.subtitle?.isEmpty == false ? b.subtitle : nil))
             case "quote":
                 guard let t = b.text, !t.isEmpty else { continue }
                 let span = index.locate(t, preferredPage: b.page.map { $0 - 1 })
@@ -307,14 +310,15 @@ final class AppModel {
                 }
                 newBlocks.append(block)
             case "instrument":
-                guard let xs = b.x_values, let series = b.series, !xs.isEmpty, !series.isEmpty else { continue }
+                guard let xs = b.chart?.x_values ?? b.x_values, let series = b.chart?.series ?? b.series,
+                      !xs.isEmpty, !series.isEmpty else { continue }
                 let clean = series.filter { $0.values.count == xs.count }
                 guard !clean.isEmpty else { continue }
                 let inst = Instrument(
-                    xLabel: b.x_label ?? "",
+                    xLabel: b.chart?.x_label ?? b.x_label ?? "",
                     xValues: xs,
                     series: clean.map { InstrumentSeries(name: $0.name, unit: $0.unit, values: $0.values) },
-                    startIndex: min(max(0, b.start_index ?? 0), xs.count - 1)
+                    startIndex: min(max(0, b.chart?.start_index ?? b.start_index ?? 0), xs.count - 1)
                 )
                 newBlocks.append(AnswerBlock(kind: .instrument, instrument: inst))
             default:

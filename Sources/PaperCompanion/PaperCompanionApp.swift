@@ -21,6 +21,11 @@ struct Launcher {
         if let i = args.firstIndex(of: "--selftest"), args.indices.contains(i + 1) {
             exit(SelfTest.run(path: args[i + 1]))
         }
+        if let i = args.firstIndex(of: "--ask") {
+            let rest = Array(args[(i + 1)...])
+            Task { exit(await AskTest.run(args: rest)) }
+            RunLoop.main.run()
+        }
         PaperCompanionApp.main()
     }
 }
@@ -43,6 +48,18 @@ struct PaperCompanionApp: App {
                         if let j = args.firstIndex(of: "--select"), args.indices.contains(j + 1) {
                             let text = args[j + 1]
                             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { model.pdf.select(text: text) }
+                        }
+                        // Test flag: `--question "…"` asks it as a new thread (with any --select), without saving.
+                        if let j = args.firstIndex(of: "--question"), args.indices.contains(j + 1) {
+                            let q = args[j + 1]
+                            model.persistenceEnabled = false
+                            model.threads = []
+                            model.openThreadID = nil
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+                                model.mode = .compose
+                                model.question = q
+                                model.send()
+                            }
                         }
                     } else if model.document == nil {
                         model.reopenLast()
