@@ -40,6 +40,23 @@ final class SpaceGeometry {
     var hoveredSource: UUID?
 }
 
+/// The app's motion, in one place. Reduce Motion (System Settings ▸ Accessibility) turns springs and
+/// movement into short fades.
+enum Motion {
+    static var reduce: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    static var mode: Animation { reduce ? .easeInOut(duration: 0.18) : .spring(duration: 0.42, bounce: 0.08) }
+    static var dissolveSeconds: Double { reduce ? 0.15 : 0.26 }
+    static var dissolve: Animation { .easeInOut(duration: dissolveSeconds) }
+    static var hover: Animation { .easeOut(duration: reduce ? 0.08 : 0.16) }
+    static var appear: Animation { reduce ? .easeOut(duration: 0.15) : .spring(duration: 0.32, bounce: 0.1) }
+    /// Swapping what's inside the glass: the old content leaves fast, then the new fades in, so the two never
+    /// sit on top of each other.
+    static var swap: AnyTransition {
+        .asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.22).delay(0.07)),
+                    removal: .opacity.animation(.easeIn(duration: 0.07)))
+    }
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -90,6 +107,40 @@ final class AppModel {
     /// Original / What-if: whether the estimated changes show on the paper.
     var whatIfShowsEdit = true
     var whatIfFocus: UUID?
+
+    // Mode switches: a still of the paper as it was, dissolving into the new layout.
+    struct PaperSnapshot { var image: NSImage; var frame: CGRect; var shown: CGRect; var faded = false }
+    var paperSnapshot: PaperSnapshot?
+    var paperHidden = false
+
+    /// Switches mode the way a native app does: light things (the glass panel, the bars) spring to their new
+    /// places; the paper, which is expensive to lay out, cross-dissolves from a still of its old layout.
+    func switchMode(_ change: () -> Void) {
+        let twoUpBefore = showingLinks || showingWhatIf
+        if paperSnapshot == nil, let image = pdf.snapshot(), geometry.pdfFrame.width > 0 {
+            paperSnapshot = PaperSnapshot(image: image, frame: geometry.pdfFrame, shown: geometry.pdfFrame)
+            paperHidden = true
+        }
+        withAnimation(Motion.mode) { change() }
+        // On the next pass, once the new layout (and the reader's place in it) has landed: dissolve.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let snap = self.paperSnapshot else { return }
+            // When the paper only changes width, the still scales into the new layout so the two line up and
+            // the page reads as one sheet shrinking or growing. Two-up pages can't line up: those just dissolve.
+            let new = self.geometry.pdfFrame
+            if twoUpBefore == (self.showingLinks || self.showingWhatIf), new.width > 0 {
+                let k = new.width / snap.frame.width
+                withAnimation(Motion.mode) {
+                    self.paperSnapshot?.shown = CGRect(x: new.minX, y: new.minY, width: new.width, height: snap.frame.height * k)
+                }
+            }
+            withAnimation(.easeIn(duration: Motion.dissolveSeconds * 0.7)) { self.paperSnapshot?.faded = true }
+            withAnimation(Motion.dissolve) { self.paperHidden = false }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Motion.dissolveSeconds + 0.05) { [weak self] in
+                self?.paperSnapshot = nil
+            }
+        }
+    }
     /// Where the reader was before the claims map narrowed the paper.
     private var placeBeforeClaims: PDFDestination?
     var showThreadList = false
@@ -558,7 +609,7 @@ final class AppModel {
         geometry.hoveredSource = nil
         if !showingClaims { placeBeforeClaims = pdf.place }
         if isMappingClaims || (!force && sel == nil && claims != nil) {
-            showingClaims = true
+            if !showingClaims { switchMode { showingClaims = true } }
             focusClaims()
             return
         }
@@ -566,7 +617,7 @@ final class AppModel {
             showKeySheet = true
             return
         }
-        showingClaims = true
+        if !showingClaims { switchMode { showingClaims = true } }
         isMappingClaims = true
         claimsError = nil
         claimsStep = ""
@@ -582,7 +633,7 @@ final class AppModel {
                 }
                 var map = try ClaimsPrompt.parse(result.html)
                 resolve(&map)
-                claims = map
+                withAnimation(Motion.appear) { claims = map }
                 selection = nil
                 pdf.clearSelection()
                 save()
@@ -599,21 +650,19 @@ final class AppModel {
     }
 
     func closeClaims() {
-        showingClaims = false
+        switchMode { showingClaims = false }
         geometry.slipFrames = [:]
         geometry.hoveredSource = nil
         if let place = placeBeforeClaims {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in self?.pdf.go(to: place) }
+            pdf.hold(.place(place))
         }
         placeBeforeClaims = nil
     }
 
     /// Once the paper has narrowed, scrolls it to the first claim so the beams have somewhere to start.
     private func focusClaims() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
-            guard let self, self.showingClaims, let span = self.claims?.claims.first(where: { $0.span != nil })?.span else { return }
-            self.pdf.show(span)
-        }
+        guard showingClaims, let span = claims?.claims.first(where: { $0.span != nil })?.span else { return }
+        pdf.hold(.span(span))
     }
 
     /// Finds each claim and piece of evidence in the PDF. Evidence shows the paper's exact words.

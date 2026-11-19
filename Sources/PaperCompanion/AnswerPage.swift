@@ -128,6 +128,10 @@ enum AnswerHTML {
           --text: rgba(255,255,255,.88); --primary: #fff; --secondary: rgba(255,255,255,.55); --tertiary: rgba(255,255,255,.32);
           --fill: rgba(255,255,255,.06); --fill-strong: rgba(255,255,255,.1); --separator: rgba(255,255,255,.12); --grid: rgba(255,255,255,.08); --surface: rgba(255,255,255,.2); } }
         html, body { background: transparent; margin: 0; }
+        @keyframes pc-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+        body { animation: pc-in .32s cubic-bezier(.2, .8, .2, 1) both; }
+        @media (prefers-reduced-motion: reduce) { body { animation: pc-in .15s ease-out both; }
+          @keyframes pc-in { from { opacity: 0; } to { opacity: 1; } } }
         body { font: 15px/1.55 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--text); padding: 4px 30px 56px;
           -webkit-font-smoothing: antialiased; overflow-wrap: break-word; }
         h1 { font-size: 26px; line-height: 1.2; font-weight: 700; color: var(--primary); margin: 0 0 14px; letter-spacing: -0.2px; }

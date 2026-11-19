@@ -7,9 +7,17 @@ final class PDFController: NSObject {
     weak var model: AppModel?
     private(set) var pdfView: PDFView?
     private var applied: [HighlightSpec] = []
-    private var annotations: [PDFAnnotation] = []
+    /// The annotations drawn for each highlight, so a change only touches the highlights that changed.
+    private var drawn: [String: Drawn] = [:]
+    /// One highlight as drawn: its annotations and its shape on the page, worked out once, so scrolling
+    /// only has to convert positions.
+    private struct Drawn { var spec: HighlightSpec; var annotations: [PDFAnnotation]; var rects: [CGRect]; var bounds: CGRect }
     /// Line rectangles (page coordinates) of each colored highlight, for hover hit-testing.
     private var hoverRects: [(id: UUID, page: Int, rects: [CGRect])] = []
+    /// Where the paper should stay while its layout changes (a mode switch narrows or widens it).
+    private var holding: (target: HoldTarget, until: Date)?
+    private var restoring = false
+    enum HoldTarget { case place(PDFDestination), span(SpanRef) }
     private var hoverFromPaper = false
     private var ignoreSelection = false
 
@@ -36,7 +44,7 @@ final class PDFController: NSObject {
 
     func setDocument(_ doc: PDFDocument?) {
         guard let pdfView, pdfView.document !== doc else { return }
-        annotations = []
+        drawn = [:]
         applied = []
         pdfView.document = doc
         DispatchQueue.main.async { [weak self] in
@@ -47,62 +55,87 @@ final class PDFController: NSObject {
 
     // MARK: Highlights
 
+    /// Shows exactly these highlights. Only the ones that changed are removed or added, so hovering in
+    /// Links mode or opening a new answer never redraws the whole paper.
     func apply(_ specs: [HighlightSpec]) {
         guard specs != applied, let doc = pdfView?.document else { return }
-        for a in annotations { a.page?.removeAnnotation(a) }
-        annotations = []
-        hoverRects = []
-        for spec in specs {
+        func key(_ s: HighlightSpec) -> String {
+            "\(s.id)|\(s.span.page)|\(s.span.location)|\(s.span.length)|\(s.colorIndex)|\(s.muted)|\(s.rgb.map { "\($0.r),\($0.g),\($0.b)" } ?? "")"
+        }
+        let wanted = Dictionary(specs.map { (key($0), $0) }, uniquingKeysWith: { a, _ in a })
+        for (k, d) in drawn where wanted[k] == nil {
+            for a in d.annotations { a.page?.removeAnnotation(a) }
+            drawn[k] = nil
+        }
+        for (k, spec) in wanted where drawn[k] == nil {
             guard let page = doc.page(at: spec.span.page), let sel = page.selection(for: spec.span.range) else { continue }
-            if !spec.muted {
-                hoverRects.append((spec.id, spec.span.page, sel.selectionsByLine().map { $0.bounds(for: page) }))
-            }
             let color = spec.muted
                 ? NSColor(white: 0.5, alpha: 0.16)
                 : spec.rgb.map { NSColor(srgbRed: $0.r / 255, green: $0.g / 255, blue: $0.b / 255, alpha: 0.32) }
                     ?? SourcePalette.nsColor(spec.colorIndex, alpha: 0.32)
+            var made: [PDFAnnotation] = []
+            var rects: [CGRect] = []
             for line in sel.selectionsByLine() {
                 let r = line.bounds(for: page)
                 guard r.width > 0.5 else { continue }
+                rects.append(r)
                 let a = PDFAnnotation(bounds: r.insetBy(dx: -0.8, dy: -0.4), forType: .highlight, withProperties: nil)
                 a.color = color
                 a.userName = "paper-companion"
                 page.addAnnotation(a)
-                annotations.append(a)
+                made.append(a)
             }
+            drawn[k] = Drawn(spec: spec, annotations: made, rects: rects, bounds: sel.bounds(for: page))
         }
+        hoverRects = drawn.values.filter { !$0.spec.muted }.map { ($0.spec.id, $0.spec.span.page, $0.rects) }
         applied = specs
         layoutChanged()
+    }
+
+    /// Keeps the paper at this place (or span) while its width or layout changes, instead of letting it
+    /// drift and jumping back afterwards.
+    func hold(_ target: HoldTarget) {
+        holding = (target, Date().addingTimeInterval(0.5))
+        DispatchQueue.main.async { [weak self] in self?.restoreHeld() }
+    }
+
+    private func restoreHeld() {
+        guard let held = holding, !restoring, let pdfView else { return }
+        guard Date() < held.until else { holding = nil; return }
+        restoring = true
+        switch held.target {
+        case .place(let d):
+            pdfView.go(to: d)
+        case .span(let span):
+            if let page = pdfView.document?.page(at: span.page), let sel = page.selection(for: span.range) {
+                let r = sel.bounds(for: page)
+                pdfView.go(to: CGRect(x: r.minX, y: r.maxY + 160, width: 1, height: 1), on: page)
+            }
+        }
+        restoring = false
     }
 
     // MARK: Geometry for beams
 
     @objc func layoutChanged() {
+        restoreHeld()
         guard let pdfView, let doc = pdfView.document, let model else { return }
         var rects: [UUID: CGRect] = [:]
         var edges: [UUID: CGFloat] = [:]
         var pages: [UUID: CGRect] = [:]
         var firstLines: [UUID: CGRect] = [:]
         let h = pdfView.bounds.height
-        for spec in applied where !spec.muted {
-            guard let page = doc.page(at: spec.span.page), let sel = page.selection(for: spec.span.range) else { continue }
-            let r = pdfView.convert(sel.bounds(for: page), from: page)
+        func flip(_ r: CGRect) -> CGRect { pdfView.isFlipped ? r : CGRect(x: r.minX, y: h - r.maxY, width: r.width, height: r.height) }
+        for d in drawn.values where !d.spec.muted {
+            guard let page = doc.page(at: d.spec.span.page) else { continue }
+            let id = d.spec.id
             let pageRect = pdfView.convert(page.bounds(for: pdfView.displayBox), from: page)
-            let flipped = pdfView.isFlipped ? r : CGRect(x: r.minX, y: h - r.maxY, width: r.width, height: r.height)
-            rects[spec.id] = flipped
-            edges[spec.id] = pageRect.maxX
-            pages[spec.id] = pdfView.isFlipped ? pageRect
-                : CGRect(x: pageRect.minX, y: h - pageRect.maxY, width: pageRect.width, height: pageRect.height)
+            rects[id] = flip(pdfView.convert(d.bounds, from: page))
+            edges[id] = pageRect.maxX
+            pages[id] = flip(pageRect)
+            if model.showingLinks, let line = d.rects.first { firstLines[id] = flip(pdfView.convert(line, from: page)) }
         }
         if pages != model.geometry.sourcePageFrames { model.geometry.sourcePageFrames = pages }
-        if model.showingLinks {
-            for spec in applied where !spec.muted {
-                guard let page = doc.page(at: spec.span.page), let sel = page.selection(for: spec.span.range),
-                      let line = sel.selectionsByLine().first else { continue }
-                let r = pdfView.convert(line.bounds(for: page), from: page)
-                firstLines[spec.id] = pdfView.isFlipped ? r : CGRect(x: r.minX, y: h - r.maxY, width: r.width, height: r.height)
-            }
-        }
         if firstLines != model.geometry.sourceFirstLines { model.geometry.sourceFirstLines = firstLines }
         if rects != model.geometry.sourceRects { model.geometry.sourceRects = rects }
         if edges != model.geometry.sourcePageEdge { model.geometry.sourcePageEdge = edges }
@@ -166,6 +199,45 @@ final class PDFController: NSObject {
     func go(to page: PDFPage) {
         pdfView?.go(to: page)
         layoutChanged()
+    }
+
+    /// A still of the paper as it looks right now, for dissolving between layouts.
+    /// PDFKit draws pages in tiles that a view capture misses (it comes out blank), so the still is drawn
+    /// from the visible pages themselves, highlights included, at screen resolution.
+    func snapshot() -> NSImage? {
+        guard let v = pdfView, v.bounds.width > 1, v.bounds.height > 1, !v.visiblePages.isEmpty else { return nil }
+        let size = v.bounds.size
+        let scale = v.window?.backingScaleFactor ?? 2
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * scale),
+                                         pixelsHigh: Int(size.height * scale), bitsPerSample: 8, samplesPerPixel: 4,
+                                         hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                         bytesPerRow: 0, bitsPerPixel: 0),
+              let gc = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        rep.size = size
+        let ctx = gc.cgContext
+        ctx.scaleBy(x: scale, y: scale)
+        for page in v.visiblePages {
+            let r = v.convert(page.bounds(for: v.displayBox), from: page)
+            let rect = v.isFlipped ? CGRect(x: r.minX, y: size.height - r.maxY, width: r.width, height: r.height) : r
+            let box = page.bounds(for: v.displayBox)
+            guard box.width > 0, box.height > 0 else { continue }
+            ctx.saveGState()
+            ctx.setShadow(offset: CGSize(width: 0, height: -1), blur: 6, color: NSColor.black.withAlphaComponent(0.18).cgColor)
+            ctx.setFillColor(NSColor.white.cgColor)
+            ctx.fill(rect)
+            ctx.restoreGState()
+            ctx.saveGState()
+            ctx.clip(to: rect)
+            ctx.translateBy(x: rect.minX, y: rect.minY)
+            ctx.scaleBy(x: rect.width / box.width, y: rect.height / box.height)
+            ctx.translateBy(x: -box.minX, y: -box.minY)
+            page.draw(with: v.displayBox, to: ctx)
+            ctx.restoreGState()
+        }
+        gc.flushGraphics()
+        let image = NSImage(size: size)
+        image.addRepresentation(rep)
+        return image
     }
 
     /// Scrolls the paper to a span without selecting it.

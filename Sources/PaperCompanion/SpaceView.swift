@@ -3,6 +3,7 @@ import SwiftUI
 /// The parallel space: the paper on the left, the composed answer on the right, beams between them.
 struct SpaceView: View {
     @Bindable var model: AppModel
+    @Namespace private var glass
 
     var body: some View {
         GeometryReader { geo in
@@ -36,6 +37,21 @@ struct SpaceView: View {
                         .padding(.top, 64)
                         .padding(.bottom, 96)
                         .padding(.leading, 48)
+                        // The paper never animates its size (PDFKit would lay it out again every frame).
+                        // A mode switch dissolves from a still of the old layout to the new one instead.
+                        .transaction { $0.animation = nil }
+                        .opacity(model.paperHidden ? 0 : 1)
+
+                    if let snap = model.paperSnapshot {
+                        Image(nsImage: snap.image)
+                            .resizable()
+                            .frame(width: snap.shown.width, height: snap.shown.height)
+                            .offset(x: snap.shown.minX, y: snap.shown.minY)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            .clipped()
+                            .opacity(snap.faded ? 0 : 1)
+                            .allowsHitTesting(false)
+                    }
 
                     // Earlier versions of the answer, stacked behind it as their own sheets.
                     if let thread = model.openThread, !claims, !links, !whatIf {
@@ -54,22 +70,27 @@ struct SpaceView: View {
                             if !links {
                             HStack {
                                 Spacer()
-                                Group {
+                                // One piece of glass for every mode: switching modes springs it to its new
+                                // width while the contents crossfade, rather than swapping one panel for another.
+                                ZStack {
                                     if whatIf {
-                                        WhatIfPanel(model: model)
+                                        WhatIfPanel(model: model).transition(Motion.swap)
                                     } else if claims {
-                                        ClaimsPanel(model: model, map: model.isMappingClaims ? nil : model.claims)
+                                        ClaimsPanel(model: model, map: model.isMappingClaims ? nil : model.claims).transition(Motion.swap)
                                     } else if let thread = model.openThread {
-                                        AnswerSheet(model: model, thread: thread)
+                                        AnswerSheet(model: model, thread: thread).transition(Motion.swap)
                                     } else {
-                                        GuideSheet(model: model)
+                                        GuideSheet(model: model).transition(Motion.swap)
                                     }
                                 }
                                 .frame(width: sheetWidth)
+                                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                                .glassEffectID("sheet", in: glass)
                             }
                             .padding(.top, 40)
                             .padding(.bottom, 100)
                             .padding(.trailing, 40)
+                            .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .trailing)))
                             }
 
                             TopBar(model: model)
@@ -91,6 +112,7 @@ struct SpaceView: View {
                                     .padding(.bottom, 26)
                                 }
                                 .frame(maxWidth: links ? .infinity : pdfWidth + 96, alignment: .center)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
                             } else if !claims, !whatIf {
                                 VStack {
                                     Spacer()
@@ -99,22 +121,23 @@ struct SpaceView: View {
                                         .padding(.bottom, 22)
                                 }
                                 .frame(maxWidth: .infinity)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
                             }
                         }
                     }
 
                     // Beams sit above the glass, so each one reaches its white slip of paper.
-                    BeamRibbons(model: model)
-                    if links { LinkLayer(model: model) }
-                    if whatIf { WhatIfLayer(model: model) }
+                    Group {
+                        BeamRibbons(model: model)
+                        if links { LinkLayer(model: model) }
+                        if whatIf { WhatIfLayer(model: model) }
+                    }
+                    .opacity(model.paperHidden ? 0 : 1)
                 } else {
                     WelcomeView(model: model)
                 }
             }
             .coordinateSpace(.named("space"))
-            .animation(.smooth(duration: 0.35), value: claims)
-            .animation(.smooth(duration: 0.35), value: links)
-            .animation(.smooth(duration: 0.35), value: whatIf)
         }
         .ignoresSafeArea()
         .background(TransparentWindow(hasShadow: model.backdrop != .clear))
@@ -130,13 +153,18 @@ struct SpaceBackdrop: View {
     let backdrop: Backdrop
     @Environment(\.colorScheme) private var scheme
 
+    /// Frosted uses the system's most translucent blur, so the desktop shows through softly, never sharply.
+    static let frostMaterial: NSVisualEffectView.Material = .fullScreenUI
+    static let frostOpacity: CGFloat = 1
+
     var body: some View {
         ZStack {
             if backdrop != .clear {
-                BehindWindowBlur()
+                BehindWindowBlur(material: backdrop == .frosted ? Self.frostMaterial : .underWindowBackground,
+                                 opacity: backdrop == .frosted ? Self.frostOpacity : 1)
                 switch backdrop {
                 case .frosted:
-                    Color.black.opacity(scheme == .dark ? 0.25 : 0.05)
+                    Color.black.opacity(scheme == .dark ? 0.12 : 0)
                 case .dimmed:
                     LinearGradient(colors: [Color(red: 0.04, green: 0.06, blue: 0.13).opacity(0.8),
                                             Color(red: 0.06, green: 0.06, blue: 0.14).opacity(0.74)],
@@ -165,10 +193,14 @@ struct SpaceBackdrop: View {
 
 /// A behind-window blur, the way standard macOS windows get their frosted, desktop-tinted background.
 struct BehindWindowBlur: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .underWindowBackground
+    var opacity: CGFloat = 1
+
     func makeNSView(context: Context) -> NSVisualEffectView {
         let v = NSVisualEffectView()
         v.blendingMode = .behindWindow
-        v.material = .underWindowBackground
+        v.material = material
+        v.alphaValue = opacity
         v.state = .active
         v.wantsLayer = true
         v.layer?.cornerRadius = 16
@@ -176,7 +208,10 @@ struct BehindWindowBlur: NSViewRepresentable {
         v.layer?.masksToBounds = true
         return v
     }
-    func updateNSView(_ v: NSVisualEffectView, context: Context) {}
+    func updateNSView(_ v: NSVisualEffectView, context: Context) {
+        v.material = material
+        v.alphaValue = opacity
+    }
 }
 
 /// Makes the hosting NSWindow transparent, so Liquid Glass samples the desktop and other windows.
@@ -351,7 +386,6 @@ struct GuideSheet: View {
         }
         .padding(30)
         .frame(maxHeight: .infinity, alignment: .top)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
     }
 
     private func step(_ n: Int, _ title: String, _ detail: String) -> some View {

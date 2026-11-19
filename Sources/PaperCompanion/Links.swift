@@ -157,7 +157,7 @@ extension PDFController {
         }
         draft.b = end
         draft.pointer = nil
-        model.linkDraft = draft
+        withAnimation(Motion.appear) { model.linkDraft = draft }
         model.suggestRelation()
     }
 
@@ -215,6 +215,7 @@ struct LinkLayer: View {
                 // Beside the link when it's in view; if the paper has scrolled it away, the card stays put.
                 let shape = LinkGeometry.ribbon(from: draft.a.id, to: b.id, g: g)
                 RelationPicker(model: model, draft: draft)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     .frame(width: 300)
                     .fixedSize(horizontal: false, vertical: true)
                     .position(x: min(max(shape?.mid.x ?? g.pdfFrame.midX, 170), g.pdfFrame.maxX - 170),
@@ -242,10 +243,12 @@ struct LinkLayer: View {
             startPoint: shape.start, endPoint: shape.end)
         // Stroked along its spine, so the ribbon keeps its width even where it falls steeply between pages.
         let style = StrokeStyle(lineWidth: (shape.startHeight + shape.endHeight) / 2, lineCap: .butt)
-        var glow = ctx
-        glow.addFilter(.blur(radius: 10))
-        glow.opacity = strong ? 0.6 : 0.35
-        glow.stroke(shape.spine, with: shading, style: style)
+        if strong {
+            var glow = ctx
+            glow.addFilter(.blur(radius: 10))
+            glow.opacity = 0.5
+            glow.stroke(shape.spine, with: shading, style: style)
+        }
         ctx.stroke(shape.spine, with: shading, style: style)
         for (pt, h) in [(shape.start, shape.startHeight), (shape.end, shape.endHeight)] {
             let tab = Path(roundedRect: CGRect(x: pt.x - 3.5, y: pt.y - h / 2, width: 7, height: h),
@@ -476,20 +479,20 @@ extension AppModel {
         if showingClaims { closeClaims() }
         if showingWhatIf { closeWhatIf() }
         placeBeforeLinks = pdf.place
-        showingLinks = true
+        switchMode { showingLinks = true }
         linkDraft = nil
         geometry.slipFrames = [:]
         if let place = placeBeforeLinks {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in self?.pdf.go(to: place) }
+            pdf.hold(.place(place))
         }
     }
 
     func closeLinks() {
-        showingLinks = false
+        switchMode { showingLinks = false }
         linkDraft = nil
         linkHover = nil
         if let place = placeBeforeLinks {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in self?.pdf.go(to: place) }
+            pdf.hold(.place(place))
         }
         placeBeforeLinks = nil
     }
@@ -508,7 +511,7 @@ extension AppModel {
                 let result = try await agent.run(system: system, user: LinkPrompt.user(a, b)) { _ in }
                 guard linkDraft?.a == a, linkDraft?.b == b else { return }   // the reader moved on
                 if let (r, why) = LinkPrompt.parse(result.html) {
-                    linkDraft?.suggestion = (r, why)
+                    withAnimation(Motion.appear) { linkDraft?.suggestion = (r, why) }
                 } else {
                     linkDraft?.error = "Claude's suggestion couldn't be read. Pick one below."
                 }
@@ -523,8 +526,10 @@ extension AppModel {
     func confirmLink(_ relation: PaperLink.Relation) {
         guard let draft = linkDraft, let b = draft.b else { return }
         let note = draft.suggestion?.relation == relation ? draft.suggestion?.why ?? "" : ""
-        links.append(PaperLink(a: draft.a, b: b, relation: relation, note: note))
-        linkDraft = nil
+        withAnimation(Motion.appear) {
+            links.append(PaperLink(a: draft.a, b: b, relation: relation, note: note))
+            linkDraft = nil
+        }
         save()
     }
 

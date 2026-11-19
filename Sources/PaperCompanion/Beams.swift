@@ -103,10 +103,22 @@ enum BeamLayout {
 /// Draws the beams. They sit above the glass so each one visibly reaches its white slip of paper.
 struct BeamRibbons: View {
     let model: AppModel
+    @State private var lastHovered: UUID?
 
+    /// A canvas can't animate its drawing, so pointing at a beam crossfades between two: all beams at rest,
+    /// and the pointed-at beam bright with the rest dimmed.
     var body: some View {
-        BeamCanvas(beams: BeamLayout.beams(model: model), hovered: model.geometry.hoveredSource)
-            .allowsHitTesting(false)
+        let beams = BeamLayout.beams(model: model)
+        let hovered = model.geometry.hoveredSource
+        ZStack {
+            BeamCanvas(beams: beams, hovered: nil)
+                .opacity(hovered == nil ? 1 : 0)
+            BeamCanvas(beams: beams, hovered: hovered ?? lastHovered)
+                .opacity(hovered == nil ? 0 : 1)
+        }
+        .allowsHitTesting(false)
+        .animation(Motion.hover, value: hovered)
+        .onChange(of: hovered) { _, new in if let new { lastHovered = new } }
     }
 }
 
@@ -135,11 +147,13 @@ struct BeamCanvas: View {
                     startPoint: CGPoint(x: beam.start.x, y: 0), endPoint: CGPoint(x: beam.end.x, y: 0))
                 let path = BeamLayout.ribbon(beam)
 
-                // A soft glow under every beam, stronger on the one being pointed at.
-                var glow = ctx
-                glow.addFilter(.blur(radius: beam.sourceID == hovered ? 12 : 9))
-                glow.opacity = beam.sourceID == hovered ? 0.6 : 0.35 * strength
-                glow.fill(path, with: shading)
+                // Only the beam being pointed at glows: a blur per beam on every scroll frame is real work.
+                if beam.sourceID == hovered {
+                    var glow = ctx
+                    glow.addFilter(.blur(radius: 10))
+                    glow.opacity = 0.5
+                    glow.fill(path, with: shading)
+                }
                 ctx.fill(path, with: shading)
 
                 // A tab on the paper's edge where the beam leaves it.
@@ -152,6 +166,5 @@ struct BeamCanvas: View {
                 }
             }
         }
-        .animation(.smooth(duration: 0.2), value: hovered)
     }
 }

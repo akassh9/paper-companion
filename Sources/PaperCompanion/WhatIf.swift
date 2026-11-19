@@ -153,6 +153,7 @@ struct WhatIfLayer: View {
 
                 ForEach(changes, id: \.1.id) { i, c, r in
                     ChangeBadge(number: i + 1, change: c)
+                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
                         .fixedSize()
                         .position(x: r.maxX + 4, y: r.minY - 13)
                         .onTapGesture { model.whatIfFocus = c.id }
@@ -361,7 +362,6 @@ struct WhatIfPanel: View {
         }
         .padding(26)
         .frame(maxHeight: .infinity, alignment: .top)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
     }
 }
 
@@ -447,21 +447,21 @@ extension AppModel {
         if showingClaims { closeClaims() }
         if showingLinks { closeLinks() }
         placeBeforeLinks = pdf.place
-        showingWhatIf = true
+        switchMode { showingWhatIf = true }
         whatIfShowsEdit = true
         geometry.slipFrames = [:]
         if let sel = selection { beginWhatIf(sel) }
         if let place = placeBeforeLinks {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in self?.pdf.go(to: place) }
+            pdf.hold(.place(place))
         }
     }
 
     func closeWhatIf() {
-        showingWhatIf = false
+        switchMode { showingWhatIf = false }
         whatIf = nil
         whatIfEditing = nil
         if let place = placeBeforeLinks {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in self?.pdf.go(to: place) }
+            pdf.hold(.place(place))
         }
         placeBeforeLinks = nil
     }
@@ -499,7 +499,7 @@ extension AppModel {
                 guard whatIf?.edit.id == edit.id else { return }
                 var result = try WhatIfPrompt.parse(raw.html)
                 for i in result.changes.indices { result.changes[i].span = locate(result.changes[i]) }
-                whatIf?.result = result
+                withAnimation(Motion.appear) { whatIf?.result = result }
             } catch {
                 guard whatIf?.edit.id == edit.id else { return }
                 whatIf?.error = (error as? ClaudeError)?.localizedDescription ?? "Couldn't reach Claude."

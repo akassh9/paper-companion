@@ -77,7 +77,6 @@ struct AnswerSheet: View {
                     }
                 }
             }
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         }
         .dropDestination(for: String.self) { items, _ in
             guard let text = items.first else { return false }

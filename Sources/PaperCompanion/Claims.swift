@@ -186,7 +186,6 @@ struct ClaimsPanel: View {
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
     }
 
     private var header: some View {
@@ -198,15 +197,21 @@ struct ClaimsPanel: View {
                 Text("\(map.claims.count) claims · \(map.evidenceCount) pieces of evidence")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            Spacer()
-            HStack(spacing: 14) {
-                ForEach([Claim.Strength.strong, .thin, .notShown], id: \.self) { s in
-                    HStack(spacing: 5) {
-                        Circle().fill(s.color).frame(width: 7, height: 7)
-                        Text(s.label)
+            Spacer(minLength: 8)
+            // The legend only shows when it fits on the line; it never wraps.
+            ViewThatFits {
+                HStack(spacing: 14) {
+                    ForEach([Claim.Strength.strong, .thin, .notShown], id: \.self) { s in
+                        HStack(spacing: 5) {
+                            Circle().fill(s.color).frame(width: 7, height: 7)
+                            Text(s.label)
+                        }
+                        .fixedSize()
                     }
                 }
+                EmptyView()
             }
             .font(.system(size: 12))
             .foregroundStyle(.secondary)
