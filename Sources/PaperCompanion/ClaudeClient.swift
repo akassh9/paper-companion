@@ -80,6 +80,12 @@ struct AgentResult {
     var code: [String]
 }
 
+/// A second look the app asks for after Claude's answer: a note, with page images attached.
+struct AgentReview {
+    var text: String
+    var pages: [Int]               // 1-based
+}
+
 /// Answers a question with Claude in a short tool loop, like Claude in chat: it can run Python on the
 /// paper (code execution, on Anthropic's servers) and look at any page as an image, then composes the
 /// answer as structured JSON. Swift has no official Anthropic SDK, so this is raw HTTP.
@@ -119,6 +125,8 @@ struct PaperAgent {
 
     /// Stop as soon as Claude starts to run code (used by Automatic).
     var escalateOnCode = false
+    /// Looks at Claude's answer and the pages it viewed; may send pages back once for a check.
+    var review: (@MainActor (String, Set<Int>) -> AgentReview?)? = nil
 
     private func runWithFiles(system: [[String: Any]], user: String, step: @escaping @MainActor (String) -> Void) async throws -> AgentResult {
         do {
@@ -139,6 +147,8 @@ struct PaperAgent {
         var container: String?
         var code: [String] = []
         var transcript: [[String: Any]] = []
+        var viewed: Set<Int> = []
+        var reviewed = false
         let started = Date()
 
         for _ in 0..<Self.maxRequests {
@@ -163,6 +173,9 @@ struct PaperAgent {
             case "tool_use":
                 var results: [[String: Any]] = []
                 for block in response.content where block["type"] as? String == "tool_use" {
+                    if block["name"] as? String == "view_page", let n = (block["input"] as? [String: Any])?["page"] as? Int {
+                        viewed.insert(n)
+                    }
                     results.append(await toolResult(for: block, step: step))
                 }
                 messages.append(["role": "user", "content": results])
@@ -189,6 +202,21 @@ struct PaperAgent {
                     html = html.replacingOccurrences(of: #"^```[a-zA-Z]*\n?|\n?```$"#, with: "", options: .regularExpression)
                 }
                 guard !html.isEmpty else { throw ClaudeError.unreadable }
+                if !reviewed, let review, let r = await review(html, viewed), !r.pages.isEmpty {
+                    // Send the pages back once, so the answer is checked against what's actually printed.
+                    reviewed = true
+                    await step(r.pages.count == 1 ? "Checking the table on page \(r.pages[0])" : "Checking the tables")
+                    var content: [[String: Any]] = [["type": "text", "text": r.text]]
+                    for p in r.pages {
+                        guard let png = Self.pageImage(document, page: p - 1) else { continue }
+                        content.append(["type": "text", "text": "Page \(p):"])
+                        content.append(["type": "image", "source": ["type": "base64", "media_type": "image/png",
+                                                                   "data": png.base64EncodedString()]])
+                        viewed.insert(p)
+                    }
+                    messages.append(["role": "user", "content": content])
+                    continue
+                }
                 return AgentResult(html: html, code: code)
             }
         }

@@ -54,7 +54,10 @@ enum WhatIfPrompt {
 
         Work out how the paper would read if the authors had used the new value. Ground every estimate in the \
         paper's own evidence: ablations, tables, equations, reported relationships. Use code to compute when it \
-        helps, and view a page if a figure or table needs reading. Only estimate what the paper gives grounds for.
+        helps. Only estimate what the paper gives grounds for.
+
+        Tables lose their columns in the extracted text, so before you estimate anything in a table, or if the \
+        edited number sits in one, look at that table's page with view_page and read the cells from the image.
 
         Reply with only this JSON, nothing before or after it:
         {
@@ -83,6 +86,31 @@ enum WhatIfPrompt {
         - If the paper gives no grounds to estimate anything, return an empty "changes" list and say why in "verdict".
         </task>
         """
+    }
+
+    /// If Claude reported changes in tables it never looked at (or the edit sits in a table it never looked
+    /// at), the app sends those pages back once and asks it to check every value against the printed cells.
+    static func review(_ text: String, viewed: Set<Int>, edit: WhatIfEdit) -> AgentReview? {
+        guard let r = try? parse(text) else { return nil }
+        var pages = Set(r.changes.filter {
+            $0.location.localizedCaseInsensitiveContains("table") || $0.location.localizedCaseInsensitiveContains("panel")
+        }.map(\.page))
+        // A "sentence" that is mostly numbers is a table row: the edit itself sits in a table. (Prose that
+        // quotes a few numbers, like "column (1), 0.52, indicates a 1.14-log-point difference", is not.)
+        let words = edit.context.split(whereSeparator: \.isWhitespace)
+        let numeric = words.filter { w in
+            let t = w.trimmingCharacters(in: CharacterSet(charactersIn: "()[],;:%−-–"))
+            return !t.isEmpty && t.allSatisfy { $0.isNumber || $0 == "." }
+        }
+        if numeric.count >= 5, Double(numeric.count) >= 0.4 * Double(words.count) { pages.insert(edit.span.page + 1) }
+        let missing = pages.subtracting(viewed).filter { $0 > 0 }.sorted().prefix(4)
+        guard !missing.isEmpty else { return nil }
+        return AgentReview(text: """
+            Here are the pages with the tables you cited, as images: \(missing.map(String.init).joined(separator: ", ")). \
+            Check every "old" value against the printed cell, and every "where" and "page" against where it \
+            actually is. Correct anything that's off, including estimates that depend on it, and reply with \
+            the corrected JSON only, in the same format.
+            """, pages: Array(missing))
     }
 
     static func parse(_ text: String) throws -> WhatIfResult {
@@ -488,8 +516,9 @@ extension AppModel {
         pdf.clearSelection()
         whatIf = WhatIf(edit: edit, isEstimating: true)
         whatIfShowsEdit = true
-        let agent = PaperAgent(apiKey: key, model: answerModel.rawValue, document: document,
+        var agent = PaperAgent(apiKey: key, model: answerModel.rawValue, document: document,
                                paperText: index.promptText, paperKey: paperKey)
+        agent.review = { text, viewed in WhatIfPrompt.review(text, viewed: viewed, edit: edit) }
         let system = Prompts.system(paperTitle: index.title, paperText: index.promptText)
         Task {
             do {
