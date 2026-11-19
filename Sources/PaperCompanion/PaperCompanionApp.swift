@@ -76,6 +76,9 @@ struct PaperCompanionApp: App {
                 Button("Open Sample Paper") { model.openSample() }
             }
             CommandGroup(after: .toolbar) {
+                Picker("Model", selection: Binding(get: { model.answerModel }, set: { model.answerModel = $0 })) {
+                    ForEach(AnswerModel.allCases) { Text($0.label).tag($0) }
+                }
                 Picker("Backdrop", selection: Binding(get: { model.backdrop }, set: { model.backdrop = $0 })) {
                     ForEach(Backdrop.allCases) { Text($0.label).tag($0) }
                 }

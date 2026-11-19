@@ -140,6 +140,8 @@ struct BlockView: View {
             QuoteSlip(model: model, block: block)
         case .instrument:
             if let inst = block.instrument { InstrumentView(instrument: inst) }
+        case .figure:
+            if let f = block.figure { FigureView(figure: f) }
         }
     }
 
@@ -236,7 +238,9 @@ struct ComposingRow: View {
             }
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text(model.composingProgress == 0 ? "Reading the paper…" : "Composing from the paper…")
+                Text(model.composingStep.isEmpty ? "Reading the paper…" : model.composingStep + "…")
+                    .contentTransition(.opacity)
+                    .animation(.easeInOut(duration: 0.2), value: model.composingStep)
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
             }

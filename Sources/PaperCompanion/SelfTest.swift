@@ -80,21 +80,32 @@ enum AskTest {
         }
         let system = Prompts.system(paperTitle: index.title, paperText: index.promptText)
         let user = Prompts.user(mode: .compose, question: args[1], passages: passages, thread: nil)
+        let paperKey = ThreadStore.key(for: (try? Data(contentsOf: URL(fileURLWithPath: args[0]))) ?? Data())
+        let agent = PaperAgent(apiKey: key, model: ProcessInfo.processInfo.environment["ASK_MODEL"] ?? AnswerModel.haiku.rawValue, document: doc, paperText: index.promptText, paperKey: paperKey)
+        let started = Date()
         do {
-            let ai = try await ClaudeClient(apiKey: key).compose(system: system, user: user) { _ in }
+            let result = try await agent.run(system: system, user: user) { step in
+                print(String(format: "  [%5.1fs] %@", Date().timeIntervalSince(started), step))
+            }
+            let ai = result.document
             print("TITLE:", ai.title)
             for b in ai.normalizedBlocks {
                 switch b.kind {
                 case "quote":
                     let found = index.locate(b.text ?? "", preferredPage: b.page.map { $0 - 1 }) != nil
                     print("QUOTE [\(found ? "found" : "MISSING")] p\(b.page ?? 0) \(b.location ?? ""): \(b.text ?? "")")
-                case "instrument":
-                    let c = b.chart
-                    print("CHART:", c?.x_label ?? "", c?.x_values ?? [], c?.series.map { "\($0.name)=\($0.values)" } ?? [])
+                case "figure":
+                    guard let f = b.figure else { print("FIGURE: (empty)"); continue }
+                    print("FIGURE [\(f.basis), \(f.source)]: \(f.y_label) vs \(f.x_label) cats=\(f.x_categories)")
+                    for s in f.series {
+                        let pts = s.points.prefix(6).map { "\($0.label)(\(FigureView.format($0.x)),\(FigureView.format($0.y)))" }
+                        print("   \(s.style) \(s.name): \(s.points.count) pts \(pts.joined(separator: " "))")
+                    }
                 default:
                     print(b.kind.uppercased() + ":", b.text ?? "", b.subtitle ?? "")
                 }
             }
+            print(String(format: "DONE in %.1fs, code blocks: %d", Date().timeIntervalSince(started), result.code.count))
             return 0
         } catch {
             print("ERROR:", error.localizedDescription)

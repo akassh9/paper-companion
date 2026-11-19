@@ -54,11 +54,18 @@ final class AppModel {
     var isComposing = false
     var composingProgress = 0
     var composingQuestion = ""
+    /// What Claude is doing right now, in plain words ("Running Python", "Looking at page 15").
+    var composingStep = ""
     var errorMessage: String?
     var showKeySheet = false
     var showThreadList = false
     /// View ▸ Backdrop. Frosted (default) blurs the desktop behind the window; Dimmed is the darker
     /// "space" from the Figma design; Clear shows the desktop as it is.
+    /// View ▸ Model. Haiku is quick and cheap; Sonnet is better when an answer needs code or a figure.
+    var answerModel = AnswerModel(rawValue: UserDefaults.standard.string(forKey: "answerModel") ?? "") ?? .haiku {
+        didSet { UserDefaults.standard.set(answerModel.rawValue, forKey: "answerModel") }
+    }
+
     var backdrop = Backdrop(rawValue: UserDefaults.standard.string(forKey: "backdrop") ?? "") ?? .frosted {
         didSet { UserDefaults.standard.set(backdrop.rawValue, forKey: "backdrop") }
     }
@@ -232,16 +239,20 @@ final class AppModel {
         composingQuestion = q
         errorMessage = nil
 
+        composingStep = ""
         let system = Prompts.system(paperTitle: index.title, paperText: index.promptText)
         let user = Prompts.user(mode: mode, question: q, passages: passages, thread: existing)
-        let client = ClaudeClient(apiKey: key)
+        guard let document, let paperKey = archiveKey else { return }
+        let agent = PaperAgent(apiKey: key, model: answerModel.rawValue, document: document,
+                               paperText: index.promptText, paperKey: paperKey)
 
         Task {
             do {
-                let doc = try await client.compose(system: system, user: user) { [weak self] n in
-                    self?.composingProgress = n
+                let result = try await agent.run(system: system, user: user) { [weak self] step in
+                    self?.composingStep = step
                 }
-                finish(doc: doc, mode: mode, question: q, passages: passages, threadID: existing?.id)
+                finish(doc: result.document, mode: mode, question: q, passages: passages, threadID: existing?.id,
+                       code: result.code)
             } catch let error as ClaudeError {
                 if case .badKey = error { showKeySheet = true }
                 errorMessage = error.localizedDescription
@@ -249,10 +260,12 @@ final class AppModel {
                 errorMessage = "Couldn't reach Claude: \(error.localizedDescription)"
             }
             isComposing = false
+            composingStep = ""
         }
     }
 
-    func finish(doc: AIDocument, mode: ComposeMode, question: String, passages: [Passage], threadID: UUID?) {
+    func finish(doc: AIDocument, mode: ComposeMode, question: String, passages: [Passage], threadID: UUID?,
+                code: [String] = []) {
         guard let index else { return }
         // Claude keeps the reader's wording for the title, which is often all lowercase.
         var doc = doc
@@ -310,17 +323,30 @@ final class AppModel {
                 }
                 newBlocks.append(block)
             case "instrument":
-                guard let xs = b.chart?.x_values ?? b.x_values, let series = b.chart?.series ?? b.series,
-                      !xs.isEmpty, !series.isEmpty else { continue }
+                guard let xs = b.x_values, let series = b.series, !xs.isEmpty, !series.isEmpty else { continue }
                 let clean = series.filter { $0.values.count == xs.count }
                 guard !clean.isEmpty else { continue }
                 let inst = Instrument(
-                    xLabel: b.chart?.x_label ?? b.x_label ?? "",
+                    xLabel: b.x_label ?? "",
                     xValues: xs,
                     series: clean.map { InstrumentSeries(name: $0.name, unit: $0.unit, values: $0.values) },
-                    startIndex: min(max(0, b.chart?.start_index ?? b.start_index ?? 0), xs.count - 1)
+                    startIndex: min(max(0, b.start_index ?? 0), xs.count - 1)
                 )
                 newBlocks.append(AnswerBlock(kind: .instrument, instrument: inst))
+            case "figure":
+                guard let f = b.figure else { continue }
+                let series = f.series.compactMap { s -> FigureSpec.Series? in
+                    let points = s.points.filter { $0.x.isFinite && $0.y.isFinite }
+                    guard !points.isEmpty else { return nil }
+                    return FigureSpec.Series(name: s.name, style: FigureSpec.Series.Style(rawValue: s.style) ?? .points,
+                                             points: points.map { FigureSpec.Point(x: $0.x, y: $0.y, label: $0.label) })
+                }
+                guard !series.isEmpty else { continue }
+                let basis = FigureSpec.Basis(rawValue: f.basis) ?? .computed
+                let spec = FigureSpec(xLabel: f.x_label, yLabel: f.y_label, xCategories: f.x_categories, series: series,
+                                      basis: basis, source: f.source,
+                                      code: basis == .computed && !code.isEmpty ? code.joined(separator: "\n\n") : nil)
+                newBlocks.append(AnswerBlock(kind: .figure, figure: spec))
             default:
                 continue
             }

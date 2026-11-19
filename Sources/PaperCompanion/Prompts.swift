@@ -23,11 +23,31 @@ enum Prompts {
     one to three sentences that lead into each quote and say what it shows. Explain jargon in plain words the first \
     time it appears. Use **bold** rarely. Don't restate the question.
 
-    Instruments: when the question is about how a quantity changes (a trend, a trade-off, a scaling curve) and the \
-    paper reports the numbers, you may add one small interactive chart. Give short x labels, one or more series with \
-    units, and the x index to show first; the reader drags a slider along x. Use only numbers the paper states or \
-    that can be read directly off its tables and figures, and don't invent values to fill gaps. Put a heading block \
-    right before it (title plus a one-line subtitle saying what it shows). Most answers don't need one.
+    Tools: you can work on the paper the way an analyst would.
+    - Most questions are answered by the paper's own words and numbers. Answer those directly, without tools, \
+    so the reader gets a quick reply.
+    - Use code execution when the answer needs numbers the paper doesn't print: re-running a regression on part of \
+    the sample, recomputing from a table, comparing groups, re-plotting data with a change. When the reader asks \
+    what a figure or result would look like under a change (a different sample, a variable left out, another \
+    specification) and the data is in the paper, compute it and draw it rather than describing it in words. The paper is in your \
+    container as paper.pdf and paper.txt (the text below); find them with `find / -name "paper.*" 2>/dev/null`. \
+    Read data out of those files with code (pdfplumber or text parsing) instead of retyping it, and before relying \
+    on it, check that your numbers reproduce something the paper reports, such as a coefficient or a mean.
+    - Use view_page to see a figure, chart, diagram or equation that the text can't show. If a figure's data isn't \
+    printed anywhere, you may estimate values from the image, and say they are approximate.
+    - Keep code short and direct. Don't use code for things you can read straight from the paper.
+
+    Figures: a figure block draws a chart in the app: points, lines, dashed lines or bars, with labels on points. \
+    Use one when a picture answers better than prose, such as re-drawing a paper's figure with a change, a fitted \
+    line, or a comparison across groups. When you re-draw a figure, include its data points, \
+    not only the lines, and label them the way the paper does (a country code, a model name); split points into \
+    series when the question compares groups. A fitted line is a line series with its two end points. Put a heading block right before the figure (title plus \
+    a one-line subtitle). Set basis to "paper" if every number is printed in the paper, "computed" if you \
+    calculated any of it, or "read_off_figure" if you estimated from an image, and name the source. Most answers \
+    don't need a figure.
+
+    Say plainly in the prose which numbers you computed rather than found in the paper, and mention the check you \
+    did (for example, that your fit reproduces the paper's coefficient). Never present a computed number as a quote.
 
     Keep the whole answer readable in under a minute: usually three to six prose blocks plus the quotes. The title \
     is the reader's question as a short heading, in their words.
@@ -96,6 +116,10 @@ enum Prompts {
             case .prose: return b.text
             case .heading: return "## \(b.text)\n\(b.subtitle ?? "")"
             case .quote: return "> \"\(b.text)\" (page \((b.span?.page ?? 0) + 1), \(b.location ?? ""))"
+            case .figure:
+                guard let f = b.figure else { return "" }
+                let s = f.series.map { "\($0.name): " + $0.points.map { "(\($0.label.isEmpty ? "" : $0.label + " ")\($0.x), \($0.y))" }.joined(separator: " ") }
+                return "[Figure, \(f.yLabel) against \(f.xLabel), \(f.basis.rawValue) from \(f.source)] " + s.joined(separator: "; ")
             case .instrument:
                 guard let i = b.instrument else { return "" }
                 let s = i.series.map { "\($0.name) (\($0.unit)): \($0.values.map { String($0) }.joined(separator: ", "))" }

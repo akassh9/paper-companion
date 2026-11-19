@@ -37,9 +37,29 @@ struct Instrument: Codable, Hashable {
     var startIndex: Int
 }
 
+/// A chart Claude draws for the question: a scatter, lines, or bars, built from the paper or computed from it.
+struct FigureSpec: Codable, Hashable {
+    enum Basis: String, Codable { case paper, computed, readOffFigure = "read_off_figure" }
+    struct Point: Codable, Hashable { var x: Double; var y: Double; var label: String }
+    struct Series: Codable, Hashable {
+        enum Style: String, Codable { case points, line, dashed, bars }
+        var name: String
+        var style: Style
+        var points: [Point]
+    }
+    var xLabel: String
+    var yLabel: String
+    var xCategories: [String]
+    var series: [Series]
+    var basis: Basis
+    var source: String
+    /// The code Claude ran for a computed figure, shown on request.
+    var code: String?
+}
+
 /// One block of a composed answer.
 struct AnswerBlock: Codable, Identifiable, Hashable {
-    enum Kind: String, Codable { case prose, heading, quote, instrument }
+    enum Kind: String, Codable { case prose, heading, quote, instrument, figure }
 
     var id = UUID()
     var kind: Kind
@@ -51,6 +71,8 @@ struct AnswerBlock: Codable, Identifiable, Hashable {
     var colorIndex: Int? = nil
     // Instruments
     var instrument: Instrument? = nil
+    // Figures
+    var figure: FigureSpec? = nil
 
     var isLinkedQuote: Bool { kind == .quote && span != nil }
 }
@@ -111,6 +133,22 @@ struct PaperArchive: Codable {
     var pdfPath: String
     var threads: [PaperThread]
     var openThreadID: UUID?
+}
+
+/// Which Claude model answers (View ▸ Model).
+enum AnswerModel: String, CaseIterable, Identifiable {
+    /// Haiku answers; if it reaches for code, the question restarts on Sonnet.
+    case automatic = "auto"
+    case haiku = "claude-haiku-5-5"
+    case sonnet = "claude-sonnet-5-5"
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .automatic: "Automatic (Haiku, Sonnet for Analysis)"
+        case .haiku: "Claude Haiku 5.5 (Fast)"
+        case .sonnet: "Claude Sonnet 5.5 (Thorough)"
+        }
+    }
 }
 
 /// What sits behind the paper and the glass (View ▸ Backdrop).
