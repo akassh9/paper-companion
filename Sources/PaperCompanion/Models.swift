@@ -135,6 +135,8 @@ struct PaperArchive: Codable {
     var pdfPath: String
     var threads: [PaperThread]
     var openThreadID: UUID?
+    var claims: ClaimsMap? = nil
+    var links: [PaperLink]? = nil
 }
 
 /// Which Claude model answers (View ▸ Model).

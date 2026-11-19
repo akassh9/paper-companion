@@ -18,9 +18,24 @@ struct AnswerSheet: View {
 
                 if let version, version.html != nil {
                     // Claude's own page for this answer, in a sandboxed web view.
-                    AnswerWebView(model: model, version: version)
+                    AnswerWebView(model: model, version: version, onDropTargeted: { dropTargeted = $0 })
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("space")) } action: {
                             model.geometry.sheetViewport = $0
+                        }
+                        .overlay {
+                            if dropTargeted {
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .strokeBorder(Color.accentColor.opacity(0.7), lineWidth: 2)
+                                    .overlay(alignment: .bottom) {
+                                        Label("Drop to add this passage to the answer", systemImage: "plus.circle.fill")
+                                            .font(.system(size: 12.5, weight: .medium))
+                                            .padding(.horizontal, 12).padding(.vertical, 7)
+                                            .background(.regularMaterial, in: Capsule())
+                                            .padding(14)
+                                    }
+                                    .padding(8)
+                                    .allowsHitTesting(false)
+                            }
                         }
                         .overlay(alignment: .bottom) {
                             if model.isComposing, model.openThreadID == thread.id {

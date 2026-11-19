@@ -59,7 +59,8 @@ final class PDFController: NSObject {
             }
             let color = spec.muted
                 ? NSColor(white: 0.5, alpha: 0.16)
-                : SourcePalette.nsColor(spec.colorIndex, alpha: 0.32)
+                : spec.rgb.map { NSColor(srgbRed: $0.r / 255, green: $0.g / 255, blue: $0.b / 255, alpha: 0.32) }
+                    ?? SourcePalette.nsColor(spec.colorIndex, alpha: 0.32)
             for line in sel.selectionsByLine() {
                 let r = line.bounds(for: page)
                 guard r.width > 0.5 else { continue }
@@ -80,6 +81,8 @@ final class PDFController: NSObject {
         guard let pdfView, let doc = pdfView.document, let model else { return }
         var rects: [UUID: CGRect] = [:]
         var edges: [UUID: CGFloat] = [:]
+        var pages: [UUID: CGRect] = [:]
+        var firstLines: [UUID: CGRect] = [:]
         let h = pdfView.bounds.height
         for spec in applied where !spec.muted {
             guard let page = doc.page(at: spec.span.page), let sel = page.selection(for: spec.span.range) else { continue }
@@ -88,7 +91,19 @@ final class PDFController: NSObject {
             let flipped = pdfView.isFlipped ? r : CGRect(x: r.minX, y: h - r.maxY, width: r.width, height: r.height)
             rects[spec.id] = flipped
             edges[spec.id] = pageRect.maxX
+            pages[spec.id] = pdfView.isFlipped ? pageRect
+                : CGRect(x: pageRect.minX, y: h - pageRect.maxY, width: pageRect.width, height: pageRect.height)
         }
+        if pages != model.geometry.sourcePageFrames { model.geometry.sourcePageFrames = pages }
+        if model.showingLinks {
+            for spec in applied where !spec.muted {
+                guard let page = doc.page(at: spec.span.page), let sel = page.selection(for: spec.span.range),
+                      let line = sel.selectionsByLine().first else { continue }
+                let r = pdfView.convert(line.bounds(for: page), from: page)
+                firstLines[spec.id] = pdfView.isFlipped ? r : CGRect(x: r.minX, y: h - r.maxY, width: r.width, height: r.height)
+            }
+        }
+        if firstLines != model.geometry.sourceFirstLines { model.geometry.sourceFirstLines = firstLines }
         if rects != model.geometry.sourceRects { model.geometry.sourceRects = rects }
         if edges != model.geometry.sourcePageEdge { model.geometry.sourcePageEdge = edges }
     }
@@ -153,6 +168,21 @@ final class PDFController: NSObject {
         layoutChanged()
     }
 
+    /// Scrolls the paper to a span without selecting it.
+    func show(_ span: SpanRef) {
+        guard let pdfView, let page = pdfView.document?.page(at: span.page), let sel = page.selection(for: span.range) else { return }
+        let r = sel.bounds(for: page)
+        pdfView.go(to: CGRect(x: r.minX, y: r.maxY + 160, width: 1, height: 1), on: page)
+        layoutChanged()
+    }
+
+    /// Where the reader is, so it can be restored after the paper changes width.
+    var place: PDFDestination? { pdfView?.currentDestination }
+    func go(to place: PDFDestination) {
+        pdfView?.go(to: place)
+        layoutChanged()
+    }
+
     func reveal(_ span: SpanRef) {
         guard let pdfView, let page = pdfView.document?.page(at: span.page), let sel = page.selection(for: span.range) else { return }
         let r = sel.bounds(for: page)
@@ -188,6 +218,19 @@ struct PDFPane: NSViewRepresentable {
 
     func updateNSView(_ view: PDFView, context: Context) {
         model.pdf.setDocument(model.document)
+        // Links mode lays pages side by side, so passages on facing pages can be joined across the gap.
+        let twoUp = model.showingLinks || model.showingWhatIf
+        let mode: PDFDisplayMode = twoUp ? .twoUpContinuous : .singlePageContinuous
+        if view.displayMode != mode {
+            view.displayMode = mode
+            view.displaysAsBook = false
+            view.pageBreakMargins = model.showingLinks
+                ? NSEdgeInsets(top: 18, left: 64, bottom: 18, right: 64)
+                : twoUp ? NSEdgeInsets(top: 18, left: 22, bottom: 18, right: 22)
+                : NSEdgeInsets(top: 18, left: 0, bottom: 18, right: 0)
+            view.autoScales = true
+            DispatchQueue.main.async { model.pdf.layoutChanged() }
+        }
         model.pdf.apply(model.highlightSpecs)
     }
 }
@@ -208,7 +251,24 @@ final class HoverPDFView: PDFView {
 
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
-        MainActor.assumeIsolated { controller?.hover(event) }
+        MainActor.assumeIsolated {
+            controller?.hover(event)
+            controller?.linkHover(event)
+        }
+    }
+
+    // In Links mode a drag draws a link instead of selecting text.
+    private var drawingLink = false
+    override func mouseDown(with event: NSEvent) {
+        drawingLink = MainActor.assumeIsolated { controller?.linkMouseDown(event) ?? false }
+        if !drawingLink { super.mouseDown(with: event) }
+    }
+    override func mouseDragged(with event: NSEvent) {
+        if drawingLink { MainActor.assumeIsolated { controller?.linkMouseDragged(event) } } else { super.mouseDragged(with: event) }
+    }
+    override func mouseUp(with event: NSEvent) {
+        if drawingLink { MainActor.assumeIsolated { controller?.linkMouseUp(event) }; drawingLink = false }
+        else { super.mouseUp(with: event) }
     }
 
     override func mouseExited(with event: NSEvent) {

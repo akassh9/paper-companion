@@ -215,7 +215,12 @@ enum AnswerHTML {
       if (window.Chart) { Chart.defaults.font.family = paperTheme.font; Chart.defaults.color = paperTheme.secondary; }
       document.querySelectorAll('paper-quote[data-qid]').forEach((q) => {
         const found = q.dataset.found === '1';
-        if (found && q.dataset.rgb) q.querySelector('mark').style.background = 'rgba(' + q.dataset.rgb + ',0.3)';
+        if (found && q.dataset.rgb) {
+          q.querySelector('mark').style.background = 'rgba(' + q.dataset.rgb + ',0.3)';
+          // The source's color as a bar down the slip's left edge, where its beam arrives.
+          q.style.boxShadow = 'inset 4px 0 0 rgba(' + q.dataset.rgb + ',0.9), 0 2px 6px rgba(0,0,0,.08)';
+          q.style.paddingLeft = '18px';
+        }
         const src = document.createElement('button');
         src.className = 'pq-source';
         const where = q.dataset.where ? ' · ' + q.dataset.where : '';
@@ -246,12 +251,52 @@ enum AnswerHTML {
     """#
 }
 
+/// A web view that takes text dragged from the paper itself instead of handing it to the page,
+/// so pulling a passage onto the answer adds it as a quote, the same as on the native sheet.
+final class DropWebView: WKWebView {
+    var onDrop: (String) -> Void = { _ in }
+    var onTargeted: (Bool) -> Void = { _ in }
+
+    private func text(_ info: NSDraggingInfo) -> String? {
+        guard let s = info.draggingPasteboard.string(forType: .string)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), s.count >= 3 else { return nil }
+        return s
+    }
+    override func draggingEntered(_ info: NSDraggingInfo) -> NSDragOperation {
+        guard text(info) != nil else { return super.draggingEntered(info) }
+        onTargeted(true)
+        return .copy
+    }
+    override func draggingUpdated(_ info: NSDraggingInfo) -> NSDragOperation {
+        text(info) != nil ? .copy : super.draggingUpdated(info)
+    }
+    override func draggingExited(_ info: NSDraggingInfo?) {
+        onTargeted(false)
+        super.draggingExited(info)
+    }
+    override func prepareForDragOperation(_ info: NSDraggingInfo) -> Bool {
+        text(info) != nil ? true : super.prepareForDragOperation(info)
+    }
+    override func performDragOperation(_ info: NSDraggingInfo) -> Bool {
+        guard let s = text(info) else { return super.performDragOperation(info) }
+        onTargeted(false)
+        onDrop(s)
+        return true
+    }
+    override func concludeDragOperation(_ info: NSDraggingInfo?) {
+        if let info, text(info) != nil { return }
+        super.concludeDragOperation(info)
+    }
+}
+
 /// A sandboxed web view showing one answer. It has no network access beyond two script CDNs, no storage,
 /// and no navigation; it can only call the `paper` API.
 struct AnswerWebView: NSViewRepresentable {
     let model: AppModel
     let version: AnswerVersion
     var scrollToEnd = false
+    /// Called while text from the paper is dragged over the answer, so the sheet can show where it lands.
+    var onDropTargeted: (Bool) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
 
@@ -259,7 +304,9 @@ struct AnswerWebView: NSViewRepresentable {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.userContentController.add(WeakHandler(context.coordinator), name: "paper")
-        let web = WKWebView(frame: .zero, configuration: config)
+        let web = DropWebView(frame: .zero, configuration: config)
+        web.onDrop = { [weak model] text in model?.dropPassage(text) }
+        web.onTargeted = onDropTargeted
         web.navigationDelegate = context.coordinator
         web.setValue(false, forKey: "drawsBackground")
         web.underPageBackgroundColor = .clear

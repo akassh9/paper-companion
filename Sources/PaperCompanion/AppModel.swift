@@ -11,10 +11,12 @@ struct LiveSelection: Equatable {
 
 /// A span to highlight in the PDF.
 struct HighlightSpec: Equatable {
-    var id: UUID           // quote block id or passage id
+    struct RGB: Equatable { var r: Double; var g: Double; var b: Double }
+    var id: UUID           // quote block id, passage id, or claim id
     var span: SpanRef
     var colorIndex: Int
     var muted: Bool        // other threads' passages: a faint gray hint
+    var rgb: RGB? = nil    // a color outside the source palette (a claim's strength)
 }
 
 /// Positions of things in the shared "space" coordinate system, used to draw beams.
@@ -24,6 +26,10 @@ final class SpaceGeometry {
     var sourceRects: [UUID: CGRect] = [:]
     /// The right edge of each span's page, in the PDF view's coordinates.
     var sourcePageEdge: [UUID: CGFloat] = [:]
+    /// The page each span is on, in the PDF view's top-left coordinates.
+    var sourcePageFrames: [UUID: CGRect] = [:]
+    /// The first line of each span, where a link between passages lands.
+    var sourceFirstLines: [UUID: CGRect] = [:]
     /// Frame of the PDF view in space coordinates.
     var pdfFrame: CGRect = .zero
     /// Frames of quote slips in space coordinates.
@@ -41,7 +47,7 @@ final class AppModel {
     var document: PDFDocument?
     var documentURL: URL?
     var index: PaperIndex?
-    private var archiveKey: String?
+    private(set) var archiveKey: String?
 
     // Threads
     var threads: [PaperThread] = []
@@ -58,6 +64,34 @@ final class AppModel {
     var composingStep = ""
     var errorMessage: String?
     var showKeySheet = false
+
+    // Claims map (idea F)
+    var claims: ClaimsMap?
+    var showingClaims = false
+    var isMappingClaims = false
+    var claimsStep = ""
+    var claimsError: String?
+    var claimsScope = "the abstract"
+
+    // Links (idea E)
+    var links: [PaperLink] = []
+    var showingLinks = false
+    var linkDraft: LinkDraft?
+    /// The sentence under the pointer in Links mode: what a line drawn from here would connect.
+    var linkHover: PaperLink.End?
+    var hoveredLink: UUID?
+    var placeBeforeLinks: PDFDestination?
+
+    // What-if (idea G)
+    var showingWhatIf = false
+    var whatIf: WhatIf?
+    /// The field over a selected number, before the new value is sent.
+    var whatIfEditing: WhatIfEdit?
+    /// Original / What-if: whether the estimated changes show on the paper.
+    var whatIfShowsEdit = true
+    var whatIfFocus: UUID?
+    /// Where the reader was before the claims map narrowed the paper.
+    private var placeBeforeClaims: PDFDestination?
     var showThreadList = false
     /// View ▸ Backdrop. Frosted (default) blurs the desktop behind the window; Dimmed is the darker
     /// "space" from the Figma design; Clear shows the desktop as it is.
@@ -67,8 +101,10 @@ final class AppModel {
     }
 
     var backdrop = Backdrop(rawValue: UserDefaults.standard.string(forKey: "backdrop") ?? "") ?? .frosted {
-        didSet { UserDefaults.standard.set(backdrop.rawValue, forKey: "backdrop") }
+        didSet { if !backdropFromTestFlag { UserDefaults.standard.set(backdrop.rawValue, forKey: "backdrop") } }
     }
+    /// A `--backdrop` test flag only changes this window, never the reader's saved choice.
+    @ObservationIgnored private var backdropFromTestFlag = false
 
     let geometry = SpaceGeometry()
     let pdf = PDFController()
@@ -79,6 +115,7 @@ final class AppModel {
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--backdrop"), args.indices.contains(i + 1),
            let b = Backdrop(rawValue: args[i + 1]) {
+            backdropFromTestFlag = true
             backdrop = b
         }
     }
@@ -102,6 +139,11 @@ final class AppModel {
         let archive = ThreadStore.load(key: key)
         threads = archive?.threads ?? []
         openThreadID = archive?.openThreadID ?? threads.last?.id
+        claims = archive?.claims
+        showingClaims = false
+        links = archive?.links ?? []
+        showingLinks = false
+        linkDraft = nil
         selection = nil
         self.question = ""
         geometry.sourceRects = [:]
@@ -133,9 +175,9 @@ final class AppModel {
     /// Off in demo mode, so layout tests never touch saved threads.
     var persistenceEnabled = true
 
-    private func save() {
+    func save() {
         guard persistenceEnabled, let key = archiveKey, let url = documentURL else { return }
-        ThreadStore.save(PaperArchive(pdfPath: url.path, threads: threads, openThreadID: openThreadID), key: key)
+        ThreadStore.save(PaperArchive(pdfPath: url.path, threads: threads, openThreadID: openThreadID, claims: claims, links: links), key: key)
     }
 
     // MARK: Threads
@@ -164,6 +206,7 @@ final class AppModel {
 
     func selectionChanged(_ sel: LiveSelection?) {
         selection = sel
+        if showingWhatIf, let sel { beginWhatIf(sel) }
         updateDefaultMode()
     }
 
@@ -187,6 +230,43 @@ final class AppModel {
     /// What to highlight in the PDF: the open answer's quotes and passages in color, other threads faintly.
     var highlightSpecs: [HighlightSpec] {
         var specs: [HighlightSpec] = []
+        // What-if shows the edited number and, unless comparing with the original, everything it moved.
+        if showingWhatIf {
+            if let e = whatIfEditing ?? whatIf?.edit {
+                specs.append(HighlightSpec(id: e.id, span: e.span, colorIndex: 0, muted: false, rgb: WhatIfStyle.tealRGB))
+            }
+            if whatIfShowsEdit {
+                for c in whatIf?.result?.changes ?? [] {
+                    guard let span = c.span, !specs.contains(where: { $0.span == span }) else { continue }
+                    specs.append(HighlightSpec(id: c.id, span: span, colorIndex: 0, muted: false, rgb: WhatIfStyle.tealRGB))
+                }
+            }
+            return specs
+        }
+        // Links mode shows the links, the one being drawn, and the sentence under the pointer.
+        if showingLinks {
+            for l in links {
+                specs.append(HighlightSpec(id: l.a.id, span: l.a.span, colorIndex: 0, muted: false, rgb: l.relation.rgb))
+                specs.append(HighlightSpec(id: l.b.id, span: l.b.span, colorIndex: 0, muted: false, rgb: l.relation.rgb))
+            }
+            let drawing = HighlightSpec.RGB(r: 10, g: 132, b: 255)
+            for end in [linkDraft?.a, linkDraft?.b].compactMap({ $0 }) where !specs.contains(where: { $0.span == end.span }) {
+                specs.append(HighlightSpec(id: end.id, span: end.span, colorIndex: 0, muted: false, rgb: drawing))
+            }
+            // The sentence under the pointer: only a faint hint of what a line from here would join.
+            if let h = linkHover, !specs.contains(where: { $0.span.overlaps(h.span) }) {
+                specs.append(HighlightSpec(id: h.id, span: h.span, colorIndex: 0, muted: true))
+            }
+            return specs
+        }
+        // The claims map shows only its claims, in the color of their strength.
+        if showingClaims {
+            for c in (isMappingClaims ? [] : claims?.claims ?? []) {
+                guard let span = c.span else { continue }
+                specs.append(HighlightSpec(id: c.id, span: span, colorIndex: 0, muted: false, rgb: c.strength.rgb))
+            }
+            return specs
+        }
         if let t = openThread {
             for p in t.passages {
                 specs.append(HighlightSpec(id: p.id, span: p.span, colorIndex: p.colorIndex, muted: false))
@@ -216,7 +296,8 @@ final class AppModel {
 
     // MARK: Composing
 
-    func send() {
+    /// Sends the question. `given` passages (from a drawn link) start a new answer about exactly those.
+    func send(passages given: [Passage]? = nil) {
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, !isComposing, let index else { return }
         guard let key = APIKeyStore.read() ?? ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] else {
@@ -227,8 +308,8 @@ final class AppModel {
 
         let mode = self.mode
         let existing = mode == .compose ? nil : openThread
-        var passages = existing?.passages ?? []
-        if let sel = selection, !passages.contains(where: { $0.span == sel.span }) {
+        var passages = given ?? existing?.passages ?? []
+        if given == nil, let sel = selection, !passages.contains(where: { $0.span == sel.span }) {
             let used = Set(passages.map(\.colorIndex))
             let color = (0..<SourcePalette.rgb.count).first { !used.contains($0) } ?? passages.count
             passages.append(Passage(span: sel.span, text: sel.text, colorIndex: color))
@@ -463,6 +544,92 @@ final class AppModel {
             }
         }
         return out
+    }
+
+    // MARK: Claims map
+
+    /// Shows the claims map: the saved one for the abstract, or a new one for the selected passage.
+    func mapClaims(force: Bool = false) {
+        guard let index, let document, let paperKey = archiveKey else { return }
+        let sel = selection
+        if showingLinks { closeLinks() }
+        if showingWhatIf { closeWhatIf() }
+        geometry.slipFrames = [:]
+        geometry.hoveredSource = nil
+        if !showingClaims { placeBeforeClaims = pdf.place }
+        if isMappingClaims || (!force && sel == nil && claims != nil) {
+            showingClaims = true
+            focusClaims()
+            return
+        }
+        guard let key = APIKeyStore.read() ?? ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] else {
+            showKeySheet = true
+            return
+        }
+        showingClaims = true
+        isMappingClaims = true
+        claimsError = nil
+        claimsStep = ""
+        claimsScope = sel == nil ? "the abstract" : "this passage"
+        let system = Prompts.system(paperTitle: index.title, paperText: index.promptText)
+        let user = ClaimsPrompt.user(passage: sel?.text, page: sel?.span.page)
+        let agent = PaperAgent(apiKey: key, model: answerModel.rawValue, document: document,
+                               paperText: index.promptText, paperKey: paperKey)
+        Task {
+            do {
+                let result = try await agent.run(system: system, user: user) { [weak self] step in
+                    self?.claimsStep = step == "Composing the answer" ? "Writing the map" : step
+                }
+                var map = try ClaimsPrompt.parse(result.html)
+                resolve(&map)
+                claims = map
+                selection = nil
+                pdf.clearSelection()
+                save()
+                focusClaims()
+            } catch let error as ClaudeError {
+                if case .badKey = error { showKeySheet = true }
+                claimsError = error.localizedDescription
+            } catch {
+                claimsError = "Couldn't reach Claude: \(error.localizedDescription)"
+            }
+            isMappingClaims = false
+            claimsStep = ""
+        }
+    }
+
+    func closeClaims() {
+        showingClaims = false
+        geometry.slipFrames = [:]
+        geometry.hoveredSource = nil
+        if let place = placeBeforeClaims {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in self?.pdf.go(to: place) }
+        }
+        placeBeforeClaims = nil
+    }
+
+    /// Once the paper has narrowed, scrolls it to the first claim so the beams have somewhere to start.
+    private func focusClaims() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+            guard let self, self.showingClaims, let span = self.claims?.claims.first(where: { $0.span != nil })?.span else { return }
+            self.pdf.show(span)
+        }
+    }
+
+    /// Finds each claim and piece of evidence in the PDF. Evidence shows the paper's exact words.
+    private func resolve(_ map: inout ClaimsMap) {
+        guard let index, let document else { return }
+        for i in map.claims.indices {
+            map.claims[i].span = index.locate(map.claims[i].quote, preferredPage: map.claims[i].page - 1)
+            for j in map.claims[i].evidence.indices {
+                let e = map.claims[i].evidence[j]
+                if let span = index.locate(e.quote, preferredPage: e.page - 1) {
+                    map.claims[i].evidence[j].span = span
+                    let text = index.text(of: span, in: document)
+                    if !text.isEmpty { map.claims[i].evidence[j].quote = text }
+                }
+            }
+        }
     }
 
     // MARK: Dragging a passage into the answer

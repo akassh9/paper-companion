@@ -37,9 +37,17 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-# Ad-hoc signatures are otherwise identified by a hash of the exact binary, so every rebuild looked like a new
-# app to the Keychain and it asked for the API key again. A fixed designated requirement keeps the identity
-# the same across rebuilds, so "Always Allow" sticks.
-codesign --force --sign - --identifier app.papercompanion.mac \
-  --requirements '=designated => identifier "app.papercompanion.mac"' "$APP"
+# The Keychain recognizes an ad-hoc signed app only by a hash of its exact binary, so after every rebuild it
+# asks for the login password again before handing over the API key. Signed with an Apple Development
+# certificate, the app is recognized by its team instead, and one "Always Allow" lasts across rebuilds.
+# Create one once in Xcode ▸ Settings ▸ Accounts ▸ Manage Certificates ▸ + ▸ Apple Development.
+IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Apple Development/ { print $2; exit }')"
+if [[ -n "$IDENTITY" ]]; then
+  codesign --force --sign "$IDENTITY" --identifier app.papercompanion.mac "$APP"
+  echo "Signed with $IDENTITY"
+else
+  codesign --force --sign - --identifier app.papercompanion.mac \
+    --requirements '=designated => identifier "app.papercompanion.mac"' "$APP"
+  echo "Signed ad hoc: the Keychain will ask again after each rebuild (see scripts/build-app.sh)"
+fi
 echo "Built $APP"

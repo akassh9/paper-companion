@@ -131,9 +131,14 @@ enum Prompts {
         case .rewrite:
             task = "Write a new, complete version of the current answer that follows the reader's instruction."
         case .branch:
+            let original = thread?.versions.first?.question ?? "the current answer's question"
             task = """
-            The reader added a new passage to this thread (the last one listed). Write a new, complete version of the \
-            answer that takes it into account while still answering the original question.
+            The reader added a new passage to this thread (the last one listed) and wrote a note about it, given as \
+            the question below. Write a new, complete version of the whole answer. It still answers the original \
+            question, "\(original)", so keep that as the <h1> and keep the earlier passages and their quotes. Weave \
+            the new passage in where it fits, quote it, and use the reader's note to decide what it should add. \
+            Don't make the answer about the new passage alone, and write it as one answer: don't call anything \
+            "the new passage" or mention that the reader added one.
             """
         }
         parts.append("<task>\(task)</task>")

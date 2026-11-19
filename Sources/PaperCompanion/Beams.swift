@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// One beam: a thin line of the source's color from a highlighted span on the page to its quote slip.
+/// One beam: a ribbon of the source's color from a highlighted span to its quote slip. It is as tall as
+/// the highlighted lines where it leaves the paper and as tall as the slip where it arrives.
 struct Beam: Identifiable {
     let id: UUID              // quote block id
     let sourceID: UUID        // highlight id (shared when a passage is quoted twice)
@@ -17,40 +18,52 @@ enum BeamLayout {
     /// Pairs each linked quote in the open answer with its source span, in space coordinates.
     @MainActor
     static func beams(model: AppModel) -> [Beam] {
-        guard let version = model.openThread?.current else { return [] }
+        // What to join: (target id in slipFrames, highlight id in sourceRects, color).
+        var links: [(id: UUID, sid: UUID, color: Color)] = []
+        if model.showingLinks || model.showingWhatIf { return [] }
+        if model.showingClaims {
+            guard !model.isMappingClaims else { return [] }
+            links = (model.claims?.claims ?? []).filter { $0.span != nil }.map { ($0.id, $0.id, $0.strength.color) }
+        } else if let version = model.openThread?.current {
+            links = version.quoteBlocks.compactMap { b in
+                model.sourceID(for: b).map { (b.id, $0, SourcePalette.color(b.colorIndex ?? 0)) }
+            }
+        }
         let g = model.geometry
         guard g.pdfFrame.width > 0 else { return [] }
+        let vp = g.sheetViewport
         var result: [Beam] = []
 
-        for block in version.quoteBlocks {
-            guard let sid = model.sourceID(for: block),
-                  let local = g.sourceRects[sid],
+        for link in links {
+            let sid = link.sid
+            guard let local = g.sourceRects[sid],
                   let edge = g.sourcePageEdge[sid],
-                  let slip = g.slipFrames[block.id]
+                  let slip = g.slipFrames[link.id]
             else { continue }
 
             // Skip quotes scrolled out of the answer sheet; their highlight in the paper still shows.
-            let vp = g.sheetViewport
             if vp.height > 0, slip.maxY < vp.minY + 12 || slip.minY > vp.maxY - 12 { continue }
 
             // Source: the page's right edge, at the height of the highlighted lines.
-            let lineHeight = min(max(local.height, 6), 12)
             var sy = g.pdfFrame.minY + local.midY
             let top = g.pdfFrame.minY + 10, bottom = g.pdfFrame.maxY - 10
             var offscreen = false
-            if sy < top { sy = top; offscreen = true }
-            if sy > bottom { sy = bottom; offscreen = true }
+            if g.pdfFrame.minY + local.maxY < top + 4 { sy = top; offscreen = true }
+            if g.pdfFrame.minY + local.minY > bottom - 4 { sy = bottom; offscreen = true }
+            sy = min(max(sy, top), bottom)
             let sx = min(g.pdfFrame.minX + edge, g.pdfFrame.maxX)
 
-            // Target: the slip's left edge, at its middle, clamped to what's visible.
-            var ty = slip.midY
-            if vp.height > 0 { ty = min(max(ty, vp.minY + 16), vp.maxY - 16) }
+            // Target: the slip's left edge, as tall as the part of the slip that is visible.
+            var t0 = slip.minY, t1 = slip.maxY
+            if vp.height > 0 { t0 = max(t0, vp.minY + 4); t1 = min(t1, vp.maxY - 4) }
 
             result.append(Beam(
-                id: block.id, sourceID: sid, color: SourcePalette.color(block.colorIndex ?? 0),
-                start: CGPoint(x: sx, y: sy), end: CGPoint(x: slip.minX, y: ty),
-                startThickness: lineHeight, endThickness: lineHeight, sourceOffscreen: offscreen))
+                id: link.id, sourceID: sid, color: link.color,
+                start: CGPoint(x: sx, y: sy), end: CGPoint(x: slip.minX, y: (t0 + t1) / 2),
+                startThickness: offscreen ? 8 : min(max(local.height + 4, 8), 64),
+                endThickness: max(12, t1 - t0), sourceOffscreen: offscreen))
         }
+
         untangle(&result)
         return result
     }
@@ -70,7 +83,7 @@ enum BeamLayout {
         }
     }
 
-    /// The beam's shape: a thin ribbon whose edges ease out of each end horizontally.
+    /// The beam's shape: a ribbon whose edges ease out of each end horizontally.
     static func ribbon(_ b: Beam) -> Path {
         let dx = (b.end.x - b.start.x) * b.curve
         let s0 = CGPoint(x: b.start.x, y: b.start.y - b.startThickness / 2)
@@ -92,35 +105,53 @@ struct BeamRibbons: View {
     let model: AppModel
 
     var body: some View {
-        let beams = BeamLayout.beams(model: model)
-        let hovered = model.geometry.hoveredSource
+        BeamCanvas(beams: BeamLayout.beams(model: model), hovered: model.geometry.hoveredSource)
+            .allowsHitTesting(false)
+    }
+}
+
+struct BeamCanvas: View {
+    let beams: [Beam]
+    let hovered: UUID?
+
+    var body: some View {
         Canvas { ctx, _ in
             // Quiet beams first, the hovered one last so it sits on top.
             let ordered = beams.sorted { ($0.sourceID == hovered ? 1 : 0) < ($1.sourceID == hovered ? 1 : 0) }
             for beam in ordered {
-                let strength: Double = hovered == nil ? 0.35 : (beam.sourceID == hovered ? 1.0 : 0.15)
-                let length = max(1, beam.end.x - beam.start.x)
-                let fadeIn = beam.sourceOffscreen ? 0.55 : min(0.4, 20 / length)
-                let stops: [Gradient.Stop] = [
-                    .init(color: beam.color.opacity(0), location: 0),
-                    .init(color: beam.color.opacity(0.8 * strength * (beam.sourceOffscreen ? 0.5 : 1)), location: fadeIn),
-                    .init(color: beam.color.opacity(0.65 * strength), location: max(fadeIn, 0.55)),
-                    .init(color: beam.color.opacity(0.9 * strength), location: 1),
-                ]
+                let strength: Double = hovered == nil ? 0.62 : (beam.sourceID == hovered ? 1.0 : 0.2)
+                let stops: [Gradient.Stop]
+                if beam.sourceOffscreen {
+                    stops = [.init(color: beam.color.opacity(0), location: 0),
+                             .init(color: beam.color.opacity(0.3 * strength), location: 0.55),
+                             .init(color: beam.color.opacity(0.6 * strength), location: 1)]
+                } else {
+                    stops = [.init(color: beam.color.opacity(0.62 * strength), location: 0),
+                             .init(color: beam.color.opacity(0.3 * strength), location: 0.5),
+                             .init(color: beam.color.opacity(0.6 * strength), location: 1)]
+                }
                 let shading = GraphicsContext.Shading.linearGradient(
                     Gradient(stops: stops),
                     startPoint: CGPoint(x: beam.start.x, y: 0), endPoint: CGPoint(x: beam.end.x, y: 0))
                 let path = BeamLayout.ribbon(beam)
-                if beam.sourceID == hovered {
-                    var glow = ctx
-                    glow.addFilter(.blur(radius: 8))
-                    glow.opacity = 0.5
-                    glow.fill(path, with: shading)
-                }
+
+                // A soft glow under every beam, stronger on the one being pointed at.
+                var glow = ctx
+                glow.addFilter(.blur(radius: beam.sourceID == hovered ? 12 : 9))
+                glow.opacity = beam.sourceID == hovered ? 0.6 : 0.35 * strength
+                glow.fill(path, with: shading)
                 ctx.fill(path, with: shading)
+
+                // A tab on the paper's edge where the beam leaves it.
+                if !beam.sourceOffscreen {
+                    let h = max(beam.startThickness, 12)
+                    let tab = Path(roundedRect: CGRect(x: beam.start.x - 3, y: beam.start.y - h / 2, width: 7, height: h),
+                                   cornerRadius: 3.5, style: .continuous)
+                    ctx.fill(tab, with: .color(beam.color.opacity(0.35 + 0.55 * strength)))
+                    ctx.stroke(tab, with: .color(.white.opacity(0.35 * strength)), lineWidth: 0.75)
+                }
             }
         }
-        .allowsHitTesting(false)
         .animation(.smooth(duration: 0.2), value: hovered)
     }
 }
