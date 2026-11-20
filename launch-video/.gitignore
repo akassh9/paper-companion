@@ -4,10 +4,6 @@ assets/music/*.flac
 assets/music/*.wav
 capture/
 render/
-blender/*.blend1
-blender/renders/
-stills/*.png
-!stills/storyboard*.jpg
 tools/winid
 tools/bin/
 *.mov
