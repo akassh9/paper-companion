@@ -4,7 +4,6 @@ assets/music/*.flac
 assets/music/*.wav
 capture/
 render/
-tools/winid
 tools/bin/
 *.mov
 *.mp4
