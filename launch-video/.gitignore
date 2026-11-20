@@ -1,0 +1,15 @@
+# Large media stays out of git; CREDITS.md and scripts are tracked.
+assets/archival/*.mp4
+assets/music/*.flac
+assets/music/*.wav
+capture/
+render/
+blender/*.blend1
+blender/renders/
+stills/*.png
+!stills/storyboard*.jpg
+tools/winid
+tools/bin/
+*.mov
+*.mp4
+*.wav
